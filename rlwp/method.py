@@ -8,14 +8,14 @@ from models import RNetwork
 from tqdm import tqdm
 
 class Method(object):
-    def __init__(self, state_dim, objs, wp_id, save_name, config):
+    def __init__(self, state_dim, objs, wp_id, save_name, config, workspace=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.state_dim = state_dim
         # self.objs = torch.FloatTensor(objs).to(device=self.device)
         self.wp_id = wp_id
         self.best_wp = []
-        self.n_inits = 5
+        self.n_inits = config['n_inits']
         self.lr = 1e-3
         self.hidden_size = 128
         self.n_models = 10
@@ -39,14 +39,32 @@ class Method(object):
             models = []
             for idx in range(self.n_models):
                 critic = RNetwork(wp_id*self.state_dim + len(objs), hidden_dim=self.hidden_size).to(device=self.device)
-                critic.load_state_dict(torch.load(save_dir + '/model_' + str(wp_id) + '_' + str(idx)))
+                critic.load_state_dict(torch.load(save_dir + '/model_' + str(wp_id) + '_' + str(idx), map_location=self.device))
                 models.append(critic)
             self.learned_models.append(models)
 
 
-        self.best_traj = self.action_dim*(np.random.rand(self.state_dim*self.wp_id) - 0.5)
+        # Waypoint bounds. Without a workspace: +-action_space for the optimizer and +-action_space/2 for exploration
+        # (original behaviour). With a workspace (position bounds relative to the start state), both use it for the
+        # xyz dims; gripper / angle dims keep the original bounds.
+        self.workspace = workspace
+        self.lb, self.ub = -self.action_dim*np.ones(self.state_dim), self.action_dim*np.ones(self.state_dim)
+        self.explore_lb, self.explore_ub = self.lb/2, self.ub/2
+        if workspace is not None:
+            self.lb[:3], self.ub[:3] = workspace
+            self.explore_lb[:3], self.explore_ub[:3] = workspace
+
+        self.best_traj = np.concatenate([self.sample_wp() for _ in range(self.wp_id)])
         self.best_reward = -np.inf
-        self.lincon = LinearConstraint(np.eye(self.state_dim), -self.action_dim, self.action_dim)
+        self.lincon = LinearConstraint(np.eye(self.state_dim), self.lb, self.ub)
+
+    def sample_wp(self):
+        if self.workspace is None:
+            return self.action_dim*(np.random.rand(self.state_dim) - 0.5)
+        return self.explore_lb + np.random.rand(self.state_dim)*(self.explore_ub - self.explore_lb)
+
+    def clip_wp(self, wp):
+        return wp if self.workspace is None else np.clip(wp, self.lb, self.ub)
 
     def traj_opt(self, i_episode, objs):
         self.reward_idx = random.choice(range(self.n_models))
@@ -61,11 +79,12 @@ class Method(object):
             self.curr_wp = idx-1
 
             if idx == self.wp_id and i_episode <= self.exploration_epoch:
-                self.best_wp = self.action_dim*(np.random.rand(self.state_dim) - 0.5)
+                self.best_wp = self.sample_wp()
 
             else:
                 for t_idx in range(self.n_inits):
                     xi0 = np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim]) + np.random.normal(0, 0.1, size=self.state_dim) if t_idx!=0 else np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim])
+                    xi0 = self.clip_wp(xi0)
 
                     res = minimize(self.get_cost, xi0, method='SLSQP', constraints=self.lincon, options={'eps': 1e-6, 'maxiter': 1e6})
                     if res.fun < min_cost:
@@ -77,6 +96,7 @@ class Method(object):
                 if idx == self.wp_id and np.random.rand() < 0.5 and i_episode>self.ensemble_sampling_epoch and i_episode<self.averaging_noise_epoch:
                     tqdm.write("NOISE ADDED TO POSE")
                     self.best_wp[:3] += np.random.normal(0, 0.05, 3)
+                    self.best_wp = self.clip_wp(self.best_wp)
 
             self.traj.append(self.best_wp)
         return np.array(self.traj).flatten()

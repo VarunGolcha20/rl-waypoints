@@ -1,0 +1,28 @@
+# Stack with the OpenMANIPULATOR-P + OM-X gripper. Run with task=Stack_omp.
+# Same schedule as Stack.yaml (paper values); the env block adds the OM-P settings.
+name: Stack
+
+env:
+  robot: 'OpenManipulatorP'
+  controller: 'default_open_manipulator_p'
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 15
+  orientation_hold: True
+  workspace:                                 # covers cubeA x [-0.08, -0.04] and cubeB x [0.02, 0.08], y +-0.08
+    low:  [-0.20, -0.25, 0.83]
+    high: [ 0.10,  0.25, 0.93]
+
+
+task:
+  action_space: 0.5
+  batch_size: 30
+  epoch_wp: 300
+
+  exploration_epoch: 75
+  ensemble_sampling_epoch: 150
+  averaging_noise_epoch: 250
+  rand_reset_epoch: 250
+
+  num_eval: 100

@@ -1,0 +1,28 @@
+# Lift with the OpenMANIPULATOR-P + OM-X gripper. Run with task=Lift_omp.
+# Same schedule as Lift.yaml (paper values) so results compare with Panda; the env block adds the OM-P settings.
+name: Lift
+
+env:
+  robot: 'OpenManipulatorP'
+  controller: 'default_open_manipulator_p'   # robosuite/controllers/config/<name>.json (coupled OSC, see IMPLEMENTATION_LOG T4a)
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 10
+  orientation_hold: True                     # keep the gripper pointing down between waypoints
+  workspace:                                 # absolute grip-point bounds (world frame, m), from omp_tools/check_omp_workspace.py
+    low:  [-0.20, -0.25, 0.83]
+    high: [ 0.05,  0.25, 0.98]
+
+
+task:
+  action_space: 0.5                          # still bounds the gripper dimension
+  batch_size: 30
+  epoch_wp: 200
+
+  exploration_epoch: 75
+  ensemble_sampling_epoch: 100
+  averaging_noise_epoch: 175
+  rand_reset_epoch: 150
+
+  num_eval: 100

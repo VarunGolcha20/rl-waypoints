@@ -5,6 +5,7 @@ from omegaconf import DictConfig, OmegaConf
 from typing import Dict
 from train import train
 from eval import evaluate
+from common import set_seed
 
 
 
@@ -22,6 +23,7 @@ def omegaconf_to_dict(d: DictConfig)->Dict:
 @hydra.main(version_base="1.2", config_name="config", config_path="./cfg")
 def main(cfg=DictConfig):
     config = omegaconf_to_dict(cfg)
+    set_seed(config.get('seed'))
 
     task = config['task']['name']
     if task == 'PickPlace':

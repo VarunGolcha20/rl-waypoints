@@ -12,6 +12,7 @@ import os, sys
 
 from memory import MyMemory
 from method import Method
+from common import get_save_name, get_controller_config, get_workspace, orientation_hold_action
 
 
 class train:
@@ -24,7 +25,9 @@ class train:
         self.run_name = config['run_name']
         self.object = None if config['object']=='' else config['object']
 
+        self.env_cfg = config['task']['env']
         self.robot = config['task']['env']['robot']
+        self.orientation_hold = self.env_cfg.get('orientation_hold', False)
         self.state_dim = config['task']['env']['state_dim']
         self.gripper_steps = config['task']['env']['gripper_steps']
         self.wp_steps = config['task']['env']['wp_steps']
@@ -65,7 +68,7 @@ class train:
         state = obs['robot0_eef_pos']
         return state
 
-    def get_action(self, env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep):
+    def get_action(self, env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep, obs=None):
         error = traj_mat[wp_idx, :] - state
         if timestep < 10:
             full_action = np.array(list(10.*error) + [0.]*(6-len(state)) +[-1.])
@@ -74,19 +77,16 @@ class train:
         else:
             full_action = np.array(list(10.*error)  +[0.]*(6-len(state)) + [0.])
 
+        # position-only tasks: keep the gripper at its start orientation (pointing down) instead of letting it drift
+        if self.orientation_hold and len(state) == 3:
+            full_action[3:6] = orientation_hold_action(obs, self.ori_goal)
+
         return full_action
 
     def train(self):
-        save_data = {'episode': [], 'reward': []}
+        save_data = {'episode': [], 'reward': [], 'success': []}
 
-        if self.object is None:
-            save_name = self.env + '/' + self.run_name
-            if self.env == 'Door' and self.use_latch:
-                save_name = self.env + '/with_latch/' + self.run_name
-            elif self.env == 'Door' and not self.use_latch:
-                save_name = self.env + 'without_latch/' + self.run_name
-        else:
-             save_name = self.env + '/' + self.object + '/' + self.run_name
+        save_name = get_save_name(self.env, self.robot, self.run_name, self.object, self.use_latch)
 
 
         # save_dir = 'models/' + save_name
@@ -94,7 +94,7 @@ class train:
         #     print("MAKING")
         #     os.makedirs(save_dir)
 
-        controller_config = load_controller_config(default_controller="OSC_POSE")
+        controller_config = get_controller_config(self.env_cfg)
 
         env = suite.make(
             env_name=self.env,
@@ -114,12 +114,14 @@ class train:
         wp_id = 1
 
         obs, objs = self.reset_env(env, get_objs=True)
+        workspace = get_workspace(self.env_cfg, self.get_state(obs))
 
-        agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config)
+        agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
 
         memory = MyMemory()
 
-        run_name = 'runs/ours_' + self.run_name + datetime.datetime.now().strftime("%H-%M")
+        robot_tag = '' if self.robot == 'Panda' else self.robot + '_'
+        run_name = 'runs/ours_' + robot_tag + self.run_name + datetime.datetime.now().strftime("%H-%M")
         writer = SummaryWriter(run_name)
 
         EPOCHS = self.epoch_wp * self.num_wp
@@ -130,7 +132,7 @@ class train:
                 agent.save_model(save_name)
 
                 wp_id += 1
-                agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config)
+                agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
 
                 memory = MyMemory()
 
@@ -142,6 +144,7 @@ class train:
             episode_reward = 0
             done, truncated = False, False
             obs, objs = self.reset_env(env, get_objs=True)
+            self.ori_goal = R.from_quat(obs['robot0_eef_quat'])
 
             traj_full = agent.traj_opt(i_episode, objs)
 
@@ -156,23 +159,25 @@ class train:
 
             time_s = 0
             train_reward = 0
+            success = False
             for timestep in range(wp_id*self.wp_steps):
                 if self.render:
                     env.render()
 
                 state = self.get_state(obs)
-                wp_idx = timestep//50
+                wp_idx = timestep//self.wp_steps
 
-                action = self.get_action(self.env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep)
+                action = self.get_action(self.env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep, obs)
 
                 time_s += 1
-                if time_s >= 50:
+                if time_s >= self.wp_steps:
                     time_s = 1
 
                 obs, reward, done, _ = env.step(action)
                 episode_reward += reward
+                success = success or env._check_success()
 
-                if timestep//50 == wp_id - 1:
+                if timestep//self.wp_steps == wp_id - 1:
                     train_reward += reward
 
                 total_steps += 1
@@ -180,13 +185,15 @@ class train:
             memory.push(np.concatenate((traj_full, objs)), episode_reward)
             save_data['episode'].append(i_episode)
             save_data['reward'].append(episode_reward)
+            save_data['success'].append(success)
 
             if train_reward > agent.best_reward:
                 agent.set_init(traj_full, train_reward)
                 agent.save_model(save_name)
 
             writer.add_scalar('reward', episode_reward, i_episode)
-            tqdm.write("wp_id: {}, Episode: {}, Reward_full: {}; Reward: {}, Predicted: {}".format(wp_id, i_episode, round(episode_reward, 2), round(train_reward, 2), round(agent.get_avg_reward(traj_full), 2)))
+            writer.add_scalar('success', float(success), i_episode)
+            tqdm.write("wp_id: {}, Episode: {}, Reward_full: {}; Reward: {}, Predicted: {}, Success: {}".format(wp_id, i_episode, round(episode_reward, 2), round(train_reward, 2), round(agent.get_avg_reward(traj_full), 2), success))
 
             pickle.dump(save_data, open('models/' + save_name + '/data.pkl', 'wb'))
 

@@ -6,6 +6,7 @@ n_inits: 5
 render: False
 train: False
 test: False
+seed: null    # integer for reproducible runs (python / numpy / torch / object placement)
 
 defaults:
   - task: Lift

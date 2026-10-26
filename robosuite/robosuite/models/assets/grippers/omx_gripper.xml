@@ -1,0 +1,72 @@
+<mujoco model="omx_gripper">
+    <!--
+    OpenMANIPULATOR-X gripper (XM430-W350 + rack-and-pinion, two parallel fingers), mounted on an adapter plate.
+
+    Source: ROBOTIS-GIT/open_manipulator (jazzy, v5.1.3) open_manipulator_description/mujoco/open_manipulator_x/
+            open_manipulator_x.xml: bodies link5 (gripper housing incl. servo), gripper_left_link, gripper_right_link.
+    Frames: robosuite expects the approach axis along +z of right_gripper. The OM-X model uses +x as approach, so
+            all OM-X geometry lives in the child body "omx_link5", rotated -90 deg about y (OM-X x -> +z, y -> y).
+            OM-X coordinates inside "omx_link5" are copied verbatim.
+    Changes vs ROBOTIS model:
+      - finger collision = boxes (the finger-mesh convex hull would bulge past the real inner face);
+        fingerpads (*_pad_collision) are the geoms robosuite's _check_grasp() uses
+      - right finger joint axis flipped to +y (range negated), so the actuators follow the PandaGripper
+        convention: finger1 closed = ctrl min, finger2 closed = ctrl max
+      - one position actuator per finger instead of actuator + mimic equality
+      - finger mass 0.001 -> 0.02 kg (numerical stability)
+      - adapter plate: 10 mm thick, 30 mm radius (placeholder until the physical adapter is designed)
+    Opening: inner faces at y = +-(0.021 + q), so the gap is 20 mm (q = -0.011) to 82 mm (q = 0.02).
+    -->
+    <compiler angle="radian"/>
+    <asset>
+        <mesh name="omx_link5" file="meshes/omx_gripper/link5.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="omx_left_palm" file="meshes/omx_gripper/gripper_left_palm.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="omx_right_palm" file="meshes/omx_gripper/gripper_right_palm.stl" scale="0.001 0.001 0.001"/>
+    </asset>
+    <actuator>
+        <position ctrllimited="true" ctrlrange="-0.011 0.02" joint="finger_joint1" kp="1000" name="gripper_finger_joint1" forcelimited="true" forcerange="-10 10"/>
+        <position ctrllimited="true" ctrlrange="-0.02 0.011" joint="finger_joint2" kp="1000" name="gripper_finger_joint2" forcelimited="true" forcerange="-10 10"/>
+    </actuator>
+    <worldbody>
+        <body name="right_gripper" pos="0 0 0">
+            <site name="ft_frame" pos="0 0 0" size="0.01 0.01 0.01" rgba="1 0 0 1" type="sphere" group="1"/>
+            <!-- adapter plate (OM-P flange -> OM-X gripper housing) -->
+            <inertial pos="0 0 0.005" mass="0.08" diaginertia="0.00002 0.00002 0.000036"/>
+            <geom type="cylinder" size="0.03 0.005" pos="0 0 0.005" rgba="0.6 0.6 0.65 1" contype="0" conaffinity="0" group="1" name="adapter_visual"/>
+            <geom type="cylinder" size="0.03 0.005" pos="0 0 0.005" group="0" name="adapter_collision"/>
+            <!-- OM-X link5 origin: housing back face is at x = -0.02, so origin = 10 mm plate + 20 mm -->
+            <body name="omx_link5" pos="0 0 0.03" quat="0.707107 0 -0.707107 0">
+                <inertial pos="0.0442068 0 0.00891422" quat="0.479052 0.479052 -0.520105 0.520105" mass="0.143276" diaginertia="9.3211e-05 8.07871e-05 7.59805e-05"/>
+                <geom type="mesh" mesh="omx_link5" rgba="0.2 0.2 0.2 1" contype="0" conaffinity="0" group="1" name="housing_visual"/>
+                <geom type="mesh" mesh="omx_link5" group="0" name="housing_collision"/>
+                <body name="leftfinger" pos="0.0817 0.021 0">
+                    <inertial pos="0.04 0.008 0" mass="0.02" diaginertia="5e-06 5e-06 5e-06"/>
+                    <joint name="finger_joint1" type="slide" axis="0 1 0" limited="true" range="-0.011 0.02" damping="100" armature="1.0" frictionloss="1.0"/>
+                    <geom type="mesh" mesh="omx_left_palm" rgba="0.3 0.3 0.3 1" contype="0" conaffinity="0" group="1" name="finger1_visual"/>
+                    <!-- finger body (outer part) and fingerpad (inner face at y = 0) -->
+                    <geom type="box" size="0.0225 0.005 0.0125" pos="0.0425 0.009 0" group="0" contype="0" conaffinity="1" solref="0.02 1" friction="1 0.005 0.0001" condim="4" name="finger1_collision"/>
+                    <geom type="box" size="0.0175 0.002 0.012" pos="0.0475 0.002 0" group="0" contype="1" conaffinity="1" solref="0.01 0.5" friction="2 0.05 0.0001" condim="4" name="finger1_pad_collision"/>
+                </body>
+                <body name="rightfinger" pos="0.0817 -0.021 0">
+                    <inertial pos="0.04 -0.008 0" mass="0.02" diaginertia="5e-06 5e-06 5e-06"/>
+                    <joint name="finger_joint2" type="slide" axis="0 1 0" limited="true" range="-0.02 0.011" damping="100" armature="1.0" frictionloss="1.0"/>
+                    <geom type="mesh" mesh="omx_right_palm" rgba="0.3 0.3 0.3 1" contype="0" conaffinity="0" group="1" name="finger2_visual"/>
+                    <geom type="box" size="0.0225 0.005 0.0125" pos="0.0425 -0.009 0" group="0" contype="0" conaffinity="1" solref="0.02 1" friction="1 0.005 0.0001" condim="4" name="finger2_collision"/>
+                    <geom type="box" size="0.0175 0.002 0.012" pos="0.0475 -0.002 0" group="0" contype="1" conaffinity="1" solref="0.01 0.5" friction="2 0.05 0.0001" condim="4" name="finger2_pad_collision"/>
+                </body>
+            </body>
+            <!-- grip point = ROBOTIS end_effector_link (OM-X x = 0.126), i.e. 0.03 + 0.126 from the flange -->
+            <body name="eef" pos="0 0 0.156" quat="1 0 0 0">
+                <site name="grip_site" pos="0 0 0" size="0.01 0.01 0.01" rgba="1 0 0 0.5" type="sphere" group="1"/>
+                <site name="ee_x" pos="0.1 0 0" size="0.005 .1" quat="0.707105 0 0.707108 0" rgba="1 0 0 0" type="cylinder" group="1"/>
+                <site name="ee_y" pos="0 0.1 0" size="0.005 .1" quat="0.707105 0.707108 0 0" rgba="0 1 0 0" type="cylinder" group="1"/>
+                <site name="ee_z" pos="0 0 0.1" size="0.005 .1" quat="1 0 0 0" rgba="0 0 1 0" type="cylinder" group="1"/>
+                <site name="grip_site_cylinder" pos="0 0 0" size="0.005 10" rgba="0 1 0 0.3" type="cylinder" group="1"/>
+            </body>
+        </body>
+    </worldbody>
+    <sensor>
+        <force name="force_ee" site="ft_frame"/>
+        <torque name="torque_ee" site="ft_frame"/>
+    </sensor>
+</mujoco>

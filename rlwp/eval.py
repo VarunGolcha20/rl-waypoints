@@ -12,17 +12,18 @@ import time
 import os, sys
 import random
 from models import RNetwork
+from common import get_save_name, get_controller_config, get_workspace, orientation_hold_action
 
 
 class Method(object):
-    def __init__(self, state_dim, objs, wp_id, save_name, config):
+    def __init__(self, state_dim, objs, wp_id, save_name, config, workspace=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.state_dim = state_dim
         # self.objs = torch.FloatTensor(objs).to(device=self.device)
         self.wp_id = wp_id
         self.best_wp = []
-        self.n_inits = 5
+        self.n_inits = config['n_inits']
         self.lr = 1e-3
         self.hidden_size = 128
         self.n_models = 10
@@ -37,14 +38,21 @@ class Method(object):
             models = []
             for idx in range(self.n_models):
                 critic = RNetwork(wp_id*self.state_dim + len(objs), hidden_dim=self.hidden_size).to(device=self.device)
-                critic.load_state_dict(torch.load(save_dir + '/model_' + str(wp_id) + '_' + str(idx)))
+                critic.load_state_dict(torch.load(save_dir + '/model_' + str(wp_id) + '_' + str(idx), map_location=self.device))
                 models.append(critic)
             self.learned_models.append(models)
 
 
-        self.best_traj = self.action_dim*(np.random.rand(self.state_dim*self.wp_id) - 0.5)
+        # same waypoint bounds as method.Method (original +-action_space when no workspace is configured)
+        self.workspace = workspace
+        self.lb, self.ub = -self.action_dim*np.ones(self.state_dim), self.action_dim*np.ones(self.state_dim)
+        if workspace is not None:
+            self.lb[:3], self.ub[:3] = workspace
+            self.best_traj = np.concatenate([self.lb + np.random.rand(self.state_dim)*(self.ub - self.lb) for _ in range(self.wp_id)])
+        else:
+            self.best_traj = self.action_dim*(np.random.rand(self.state_dim*self.wp_id) - 0.5)
         self.best_reward = -np.inf
-        self.lincon = LinearConstraint(np.eye(self.state_dim), -self.action_dim, self.action_dim)
+        self.lincon = LinearConstraint(np.eye(self.state_dim), self.lb, self.ub)
 
     def traj_opt(self, i_episode, objs):
         self.reward_idx = random.choice(range(self.n_models))
@@ -60,6 +68,8 @@ class Method(object):
 
             for t_idx in range(self.n_inits):
                 xi0 = np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim]) + np.random.normal(0, 0.1, size=self.state_dim) if t_idx!=0 else np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim])
+                if self.workspace is not None:
+                    xi0 = np.clip(xi0, self.lb, self.ub)
 
                 res = minimize(self.get_cost, xi0, method='SLSQP', constraints=self.lincon, options={'eps': 1e-6, 'maxiter': 1e6})
                 if res.fun < min_cost:
@@ -100,7 +110,9 @@ class evaluate:
         self.run_name = config['run_name']
         self.object = None if config['object']=='' else config['object']
 
+        self.env_cfg = config['task']['env']
         self.robot = config['task']['env']['robot']
+        self.orientation_hold = self.env_cfg.get('orientation_hold', False)
         self.state_dim = config['task']['env']['state_dim']
         self.gripper_steps = config['task']['env']['gripper_steps']
         self.wp_steps = config['task']['env']['wp_steps']
@@ -139,7 +151,7 @@ class evaluate:
         state = obs['robot0_eef_pos']
         return state
 
-    def get_action(self, env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep):
+    def get_action(self, env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep, obs=None):
         error = traj_mat[wp_idx, :] - state
         if timestep < 10:
             full_action = np.array(list(10.*error) + [0.]*(6-len(state)) +[-1.])
@@ -148,22 +160,18 @@ class evaluate:
         else:
             full_action = np.array(list(10.*error)  +[0.]*(6-len(state)) + [0.])
 
+        # position-only tasks: keep the gripper at its start orientation (pointing down) instead of letting it drift
+        if self.orientation_hold and len(state) == 3:
+            full_action[3:6] = orientation_hold_action(obs, self.ori_goal)
+
         return full_action
 
     def eval(self):
-        save_data = {'episode': [], 'reward': []}
+        save_data = {'episode': [], 'reward': [], 'success': []}
 
-        if self.object is None:
-            save_name = self.env + '/' + self.run_name
-            if self.env == 'Door' and self.use_latch:
-                save_name = self.env + '/with_latch/' + self.run_name
-            elif self.env == 'Door' and not self.use_latch:
-                save_name = self.env + 'without_latch/' + self.run_name
-        else:
-             save_name = self.env + '/' + self.object + '/' + self.run_name
+        save_name = get_save_name(self.env, self.robot, self.run_name, self.object, self.use_latch)
 
-
-        controller_config = load_controller_config(default_controller="OSC_POSE")
+        controller_config = get_controller_config(self.env_cfg)
 
         env = suite.make(
             env_name=self.env,
@@ -183,18 +191,20 @@ class evaluate:
         wp_id = self.num_wp
 
         obs, objs = self.reset_env(env, get_objs=True)
+        workspace = get_workspace(self.env_cfg, self.get_state(obs))
 
-        agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config)
+        agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
 
 
         EPOCHS = self.n_eval
 
         total_steps = 0
-        for i_episode in tqdm(range(1, EPOCHS)):
+        for i_episode in tqdm(range(1, EPOCHS + 1)):
 
             episode_reward = 0
             done, truncated = False, False
             obs, objs = self.reset_env(env, get_objs=True)
+            self.ori_goal = R.from_quat(obs['robot0_eef_quat'])
 
             traj_full = agent.traj_opt(i_episode, objs)
 
@@ -204,33 +214,38 @@ class evaluate:
 
             time_s = 0
             train_reward = 0
+            success = False
             for timestep in range(wp_id*self.wp_steps):
                 if self.render:
                     env.render()
 
                 state = self.get_state(obs)
-                wp_idx = timestep//50
+                wp_idx = timestep//self.wp_steps
 
-                action = self.get_action(self.env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep)
+                action = self.get_action(self.env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep, obs)
 
                 time_s += 1
-                if time_s >= 50:
+                if time_s >= self.wp_steps:
                     time_s = 1
 
                 obs, reward, done, _ = env.step(action)
                 episode_reward += reward
+                success = success or env._check_success()
 
-                if timestep//50 == wp_id - 1:
+                if timestep//self.wp_steps == wp_id - 1:
                     train_reward += reward
 
                 total_steps += 1
 
             save_data['episode'].append(i_episode)
             save_data['reward'].append(episode_reward)
+            save_data['success'].append(success)
 
 
             pickle.dump(save_data, open('models/' + save_name + '/eval_data.pkl', 'wb'))
 
+        print("EVAL {}: {} episodes, reward {:.2f} +- {:.2f}, success rate {:.0%}".format(
+            save_name, len(save_data['reward']), np.mean(save_data['reward']), np.std(save_data['reward']), np.mean(save_data['success'])))
         exit()
 
 

@@ -1,0 +1,90 @@
+<mujoco model="open_manipulator_p">
+    <!--
+    ROBOTIS OpenMANIPULATOR-P (RM-P60-RNH), 6-DoF, arm only (no gripper).
+
+    Source: ROBOTIS-GIT/open_manipulator_p, branch ros2, open_manipulator_p_description/urdf/open_manipulator_p.urdf.xacro
+      - kinematics (joint origins / axes) and masses / COMs copied from the URDF
+      - inertia tensors: the URDF's *active* tensors are placeholders (ixx=iyy=izz=1.0); the real
+        values, kept commented out in the URDF, are used here
+      - meshes: the URDF's STL files, unchanged (mm, scaled by 0.001)
+    Changes vs URDF:
+      - joint ranges = hardware operating ranges from the ROBOTIS e-manual (URDF uses +-pi/2 everywhere)
+      - torque motors (robosuite OSC outputs torques); ctrlrange = Dynamixel-P continuous torque
+      - armature: estimated reflected rotor inertia of the geared Dynamixel-P actuators (tunable, see IMPLEMENTATION_LOG.md)
+      - "right_hand" body at the flange face, rotated so its +z is the tool (approach) axis = end_link +x
+    -->
+    <!-- robosuite's world file already uses radians; this makes the file correct when loaded standalone too -->
+    <compiler angle="radian"/>
+    <actuator>
+        <motor ctrllimited="true" ctrlrange="-44.7 44.7" joint="joint1" name="torq_j1"/>
+        <motor ctrllimited="true" ctrlrange="-44.7 44.7" joint="joint2" name="torq_j2"/>
+        <motor ctrllimited="true" ctrlrange="-25.3 25.3" joint="joint3" name="torq_j3"/>
+        <motor ctrllimited="true" ctrlrange="-25.3 25.3" joint="joint4" name="torq_j4"/>
+        <motor ctrllimited="true" ctrlrange="-5.1 5.1" joint="joint5" name="torq_j5"/>
+        <motor ctrllimited="true" ctrlrange="-5.1 5.1" joint="joint6" name="torq_j6"/>
+    </actuator>
+    <asset>
+        <mesh name="link1" file="meshes/link1.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="link2" file="meshes/link2.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="link3" file="meshes/link3.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="link4" file="meshes/link4.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="link5" file="meshes/link5.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="link6" file="meshes/link6.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="end_link" file="meshes/end_link.stl" scale="0.001 0.001 0.001"/>
+        <material name="omp_grey" specular="0.5" shininess="0.3" rgba="0.75 0.75 0.75 1"/>
+        <material name="omp_dark" specular="0.5" shininess="0.3" rgba="0.15 0.15 0.15 1"/>
+    </asset>
+    <worldbody>
+        <!-- base = URDF link1 (fixed) -->
+        <body name="base" pos="0 0 0">
+            <camera mode="fixed" name="robotview" pos="0.9 0 0.45" quat="0.653 0.271 0.271 0.653"/>
+            <inertial pos="0.00023 0 0.06223" mass="0.85644" fullinertia="0.00121064 0.00120886 0.00038103 0 0.000011 0"/>
+            <geom mesh="link1" material="omp_dark" type="mesh" contype="0" conaffinity="0" group="1" name="link1_visual"/>
+            <geom mesh="link1" type="mesh" rgba="0.7 0.7 0.7 1" name="link1_collision"/>
+            <body name="link2" pos="0 0 0.126">
+                <inertial pos="0 0.0008 0.03183" mass="0.94658" fullinertia="0.00152547 0.00045954 0.0015174 0 0 -0.00001086"/>
+                <joint name="joint1" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14159 3.14159" damping="0.7" armature="1.0" frictionloss="0.1"/>
+                <geom mesh="link2" material="omp_grey" type="mesh" contype="0" conaffinity="0" group="1" name="link2_visual"/>
+                <geom mesh="link2" type="mesh" rgba="0.7 0.7 0.7 1" name="link2_collision"/>
+                <body name="link3" pos="0 0.069 0.033">
+                    <inertial pos="0.01768 -0.06881 0.20524" mass="1.3026" fullinertia="0.01111021 0.01046642 0.00202081 0.00001331 -0.00134208 0.00016235"/>
+                    <joint name="joint2" pos="0 0 0" axis="0 1 0" limited="true" range="-1.5708 1.5708" damping="0.7" armature="1.0" frictionloss="0.1"/>
+                    <geom mesh="link3" material="omp_grey" type="mesh" contype="0" conaffinity="0" group="1" name="link3_visual"/>
+                    <geom mesh="link3" type="mesh" rgba="0.7 0.7 0.7 1" name="link3_collision"/>
+                    <body name="link4" pos="0.03 -0.0115 0.264">
+                        <inertial pos="0.12475 -0.05716 0.02979" mass="1.15977" fullinertia="0.00096726 0.00318801 0.00341484 0.00004383 -0.00002771 0.00000627"/>
+                        <joint name="joint3" pos="0 0 0" axis="0 1 0" limited="true" range="-1.5708 2.3562" damping="0.7" armature="0.5" frictionloss="0.1"/>
+                        <geom mesh="link4" material="omp_grey" type="mesh" contype="0" conaffinity="0" group="1" name="link4_visual"/>
+                        <geom mesh="link4" type="mesh" rgba="0.7 0.7 0.7 1" name="link4_collision"/>
+                        <body name="link5" pos="0.195 -0.0575 0.03">
+                            <inertial pos="0.05642 -0.00217 0.00002" mass="0.44688" fullinertia="0.00030285 0.00022339 0.00039766 0.00000761 0.00000031 -0.00000001"/>
+                            <joint name="joint4" pos="0 0 0" axis="1 0 0" limited="true" range="-3.14159 3.14159" damping="0.7" armature="0.5" frictionloss="0.1"/>
+                            <geom mesh="link5" material="omp_grey" type="mesh" contype="0" conaffinity="0" group="1" name="link5_visual"/>
+                            <geom mesh="link5" type="mesh" rgba="0.7 0.7 0.7 1" name="link5_collision"/>
+                            <body name="link6" pos="0.063 0.045 0">
+                                <inertial pos="0.06831 -0.04457 0" mass="0.43273" fullinertia="0.00021512 0.00042827 0.00051436 0.00001009 0 0"/>
+                                <joint name="joint5" pos="0 0 0" axis="0 1 0" limited="true" range="-1.5708 1.5708" damping="0.7" armature="0.1" frictionloss="0.1"/>
+                                <geom mesh="link6" material="omp_grey" type="mesh" contype="0" conaffinity="0" group="1" name="link6_visual"/>
+                                <geom mesh="link6" type="mesh" rgba="0.7 0.7 0.7 1" name="link6_collision"/>
+                                <body name="end_link" pos="0.123 -0.045 0">
+                                    <inertial pos="0.00337 0 0" mass="0.01919" fullinertia="0.00000938 0.00000338 0.00000635 0 0 0"/>
+                                    <joint name="joint6" pos="0 0 0" axis="1 0 0" limited="true" range="-3.14159 3.14159" damping="0.7" armature="0.1" frictionloss="0.1"/>
+                                    <geom mesh="end_link" material="omp_dark" type="mesh" contype="0" conaffinity="0" group="1" name="end_link_visual"/>
+                                    <geom mesh="end_link" type="mesh" rgba="0.7 0.7 0.7 1" name="end_link_collision"/>
+                                    <!-- flange face (end_link mesh ends at x = 0.0115). +z of right_hand = end_link +x (tool axis) -->
+                                    <body name="right_hand" pos="0.0115 0 0" quat="0.707107 0 0.707107 0">
+                                        <camera mode="fixed" name="eye_in_hand" pos="0.05 0 0" quat="0 0.707108 0.707108 0" fovy="75"/>
+                                    </body>
+                                </body>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+    <contact>
+        <!-- base is welded to the world, so MuJoCo's parent/child filter does not apply; the meshes touch at joint1 -->
+        <exclude body1="base" body2="link2"/>
+    </contact>
+</mujoco>

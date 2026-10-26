@@ -1,5 +1,7 @@
 # Waypoint-Based Reinforcement Learning for Robot Manipulation Tasks
 
+> **OpenMANIPULATOR-P port:** see [README_OMP.md](README_OMP.md) for the ROBOTIS OpenMANIPULATOR-P + OM-X gripper setup, training launcher and evaluation.
+
 This repository provides our implementation of Waypoint-Based RL. The videos for experiments can be found [here](https://youtu.be/MMEd-lYfq4Y)
 
 ## Installation

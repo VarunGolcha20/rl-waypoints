@@ -1,0 +1,18 @@
+<mujoco model="omp_riser_mount">
+    <!--
+    Table-top riser block for the OpenMANIPULATOR-P (10 cm tall, 14 x 14 cm footprint).
+    robosuite moves the mount root onto the robot base (top_offset = 0), so the box hangs *below* the root
+    (geom pos z = -H/2). The root's pos z = -H in this file is read as bottom_offset, which is what lifts the robot by H
+    above the surface it is placed on. To change the height H, edit all three together:
+    root pos z = -H, geom size z = H/2, geom pos z = -H/2.
+    Why a riser: with the tool pointing straight down, J5's +-90 deg limit keeps the grip point at most ~0.10 m above
+    the base, so a robot sitting directly on the table could barely lift anything (see IMPLEMENTATION_LOG.md, T3).
+    -->
+    <worldbody>
+        <body name="base" pos="0 0 -0.1">
+            <inertial pos="0 0 -0.05" mass="2.0" diaginertia="0.005 0.005 0.005"/>
+            <geom name="riser_visual" type="box" size="0.07 0.07 0.05" pos="0 0 -0.05" rgba="0.25 0.25 0.28 1" contype="0" conaffinity="0" group="1"/>
+            <geom name="riser_collision" type="box" size="0.07 0.07 0.05" pos="0 0 -0.05" group="0"/>
+        </body>
+    </worldbody>
+</mujoco>
