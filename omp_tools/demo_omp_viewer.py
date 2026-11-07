@@ -17,6 +17,8 @@ import numpy as np
 import robosuite as suite
 from robosuite.controllers import load_controller_config
 
+LIFT = 0.06  # lift height above the grasp point (top of the reach band with the 9 mm base plate)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -68,7 +70,7 @@ def main():
             grasp = cube + [0, 0, 0.005]
             # (target, gripper, steps): above -> descend -> close -> lift -> hold -> release
             plan = [(grasp + [0, 0, 0.08], -1, 15), (grasp, -1, 15), (grasp, 1, 10),
-                    (grasp + [0, 0, 0.12], 1, 20), (grasp + [0, 0, 0.12], 1, 10), (grasp + [0, 0, 0.12], -1, 10)]
+                    (grasp + [0, 0, LIFT], 1, 20), (grasp + [0, 0, LIFT], 1, 10), (grasp + [0, 0, LIFT], -1, 10)]
             success = False
             for target, grip, n in plan:
                 for _ in range(n):

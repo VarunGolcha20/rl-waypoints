@@ -17,11 +17,13 @@ import robosuite as suite
 from robosuite.controllers import load_controller_config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+LIFT = 0.06  # scripted pick: lift height above the grasp point (top of the reach band with the 9 mm base plate)
 
 
-def make_env(env_name, controller="rlwp"):
-    # Same arguments as rlwp/train.py
-    cfg = load_controller_config(default_controller="OSC_POSE") if controller == "rlwp" else None
+def make_env(env_name, controller="default"):
+    # Same arguments as rlwp/train.py. "default" = the robot's own controller config (default_open_manipulator_p,
+    # coupled OSC, as used by the *_omp task configs); "generic" = robosuite's generic OSC_POSE (original rlwp)
+    cfg = load_controller_config(default_controller="OSC_POSE") if controller == "generic" else None
     return suite.make(
         env_name=env_name,
         robots="OpenManipulatorP",
@@ -68,9 +70,9 @@ def main():
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
-    # 0. The robot's own default controller config loads too
-    make_env(args.env, controller="default").close()
-    print("[make] default_open_manipulator_p controller config: ok")
+    # 0. The generic controller config (original rlwp) loads too
+    make_env(args.env, controller="generic").close()
+    print("[make] generic OSC_POSE controller config: ok")
 
     env = make_env(args.env)
     obs = env.reset()
@@ -88,7 +90,7 @@ def main():
         np.round(env.robots[0].init_qpos, 3)))
     print("[contacts] at reset: %s" % (contacts(env) or "none"))
     riser = m.geom_name2id("mount0_riser_collision")
-    print("[place] riser box spans z %.3f .. %.3f (table top 0.8, base %.3f)" % (
+    print("[place] base plate spans z %.3f .. %.3f (table top 0.8, base %.3f)" % (
         d.geom_xpos[riser][2] - m.geom_size[riser][2], d.geom_xpos[riser][2] + m.geom_size[riser][2], base[2]))
 
     render(env, os.path.join(args.out, "env_%s_reset_persp.png" % args.env), (base[0] + 0.25, 0, 0.9), 150, -25, 1.1)
@@ -100,7 +102,7 @@ def main():
     drift = np.linalg.norm(obs["robot0_eef_pos"] - eef)
     print("[hold] eef drift after 30 zero-action steps (3 s): %.4f m -> %s" % (drift, "ok" if drift < 0.01 else "CHECK"))
 
-    # 2. OSC direction response: 5 steps of +x, then +z (expected ~0.025 m/step per axis at action 0.5)
+    # 2. OSC direction response: 5 steps of +x, then +z (commanded 0.025 m/step at action 0.5; Panda moves ~0.05 m in 5 steps)
     for axis, name in [(0, "x"), (2, "z")]:
         p0 = obs["robot0_eef_pos"].copy()
         a = np.zeros(env.action_dim)
@@ -108,7 +110,7 @@ def main():
         for _ in range(5):
             obs, *_ = env.step(a)
         dp = obs["robot0_eef_pos"] - p0
-        print("[osc] +%s x5: moved %s m -> %s" % (name, np.round(dp, 3), "ok" if dp[axis] > 0.05 and
+        print("[osc] +%s x5: moved %s m -> %s" % (name, np.round(dp, 3), "ok" if dp[axis] > 0.04 and
                                                  np.abs(np.delete(dp, axis)).max() < 0.5 * dp[axis] else "CHECK"))
 
     # 3. Gripper close / open through the env action
@@ -128,7 +130,7 @@ def main():
         obs, _ = p_control(env, obs, grasp, 1, 10)
         grasped = env._check_grasp(gripper=env.robots[0].gripper, object_geoms=env.cube)
         render(env, os.path.join(args.out, "env_Lift_grasp.png"), (cube[0] - 0.1, 0, 0.88), 150, -20, 0.7)
-        obs, reward = p_control(env, obs, grasp + [0, 0, 0.12], 1, 20)
+        obs, reward = p_control(env, obs, grasp + [0, 0, LIFT], 1, 20)
         lifted = obs["cube_pos"][2] - cube[2]
         success = env._check_success()
         render(env, os.path.join(args.out, "env_Lift_lifted.png"), (cube[0] - 0.1, 0, 0.9), 150, -20, 0.8)

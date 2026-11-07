@@ -57,7 +57,7 @@ omp_tools/train_omp.sh -t Lift_omp -s "0 1 2" -n omp_lift
 # 3) Panda baseline with the same code and seeds (original Lift config)
 omp_tools/train_omp.sh -t Lift -s "0 1 2" -n panda_lift
 
-# 4) Stack on OM-P (~40 min per seed)
+# 4) Stack on OM-P (~40 min per seed). NOT viable yet with the 9 mm base plate (see §5)
 omp_tools/train_omp.sh -t Stack_omp -s "0 1 2" -n omp_stack
 ```
 
@@ -130,8 +130,12 @@ and the workspace boxes from `check_omp_workspace.py`:
 
 | Task | workspace low | workspace high |
 |---|---|---|
-| Lift_omp | [-0.20, -0.25, 0.83] | [0.05, 0.25, 0.98] |
-| Stack_omp | [-0.20, -0.25, 0.83] | [0.10, 0.25, 0.93] |
+| Lift_omp | [-0.25, -0.25, 0.83] | [0.05, 0.25, 0.88] |
+| Stack_omp | [-0.25, -0.15, 0.83] | [0.10, 0.15, 0.88] |
+
+With the 9 mm base plate the reachable band is only 0.83–0.88 m (3–8 cm above the table). That is enough for Lift
+(the cube must rise ~2 cm), but **not for Stack**: cubeB spawns 0.35–0.40 m from the base, where cubeA can't be carried
+above it (scripted stacking 1/10). Stack needs the base moved closer, a higher base, or a smaller spawn region first.
 
 If you change the robot model, its base placement or the controller, rerun `omp_tools/check_omp_workspace.py` and paste
 the printed `workspace:` blocks into the task YAMLs.
@@ -144,10 +148,13 @@ Door, NutAssembly and PickPlace don't have OM-P configs yet. Their layouts need 
   inertias, hardware joint ranges, Dynamixel-P torque limits). Class `OpenManipulatorP`.
 * **Gripper**: `robosuite/robosuite/models/assets/grippers/omx_gripper.xml` (from ROBOTIS' OM-X MuJoCo model,
   20–80 mm opening, box fingerpads), class `OMXGripper`, on a 10 mm adapter plate.
-* **Mount**: the robot stands on a **10 cm riser on the table top** (`OMPRiserMount`), base at x = −0.32 m. With the
-  gripper pointing down, OM-P's wrist (J5, ±90°) limits the grip point to ~0.10 m above the base, hence the riser.
+* **Mount**: the robot stands on a **~9 mm base plate on the table top** (a TurtleBot3 Waffle Pi waffle plate,
+  `OMPRiserMount`; thickness to be confirmed by measurement), base at x = −0.32 m, z = 0.809 m. With the gripper
+  pointing down, OM-P's wrist (J5, ±90°) limits the grip point to ~0.10 m above the base, so the base height sets the
+  whole vertical working range. To change it, edit the three numbers in
+  `robosuite/robosuite/models/assets/mounts/omp_riser_mount.xml`, then rerun `check_omp_workspace.py` and update §5.
   Mirror this on the real robot.
-* **Start pose**: gripper pointing down, 0.17 m above the table, 0.22 m in front of the base.
+* **Start pose**: gripper pointing down, 0.079 m above the table, 0.22 m in front of the base.
 * **Controller**: `controllers/config/default_open_manipulator_p.json` = robosuite OSC_POSE with
   `uncouple_pos_ori: false`. The default uncoupled OSC moves this 6-DoF arm at half speed along x.
 

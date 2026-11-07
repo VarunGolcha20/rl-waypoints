@@ -1,5 +1,8 @@
 # Stack with the OpenMANIPULATOR-P + OM-X gripper. Run with task=Stack_omp.
 # Same schedule as Stack.yaml (paper values); the env block adds the OM-P settings.
+# WARNING (9 mm base plate): not viable in this layout. cubeB spawns 0.35-0.40 m from the base, where the arm cannot
+# carry cubeA above cubeB's top (scripted stacking: 1/10). Needs the base moved closer, a higher base, or a smaller
+# spawn region before training (see IMPLEMENTATION_LOG.md, T3b).
 name: Stack
 
 env:
@@ -11,8 +14,8 @@ env:
   gripper_steps: 15
   orientation_hold: True
   workspace:                                 # covers cubeA x [-0.08, -0.04] and cubeB x [0.02, 0.08], y +-0.08
-    low:  [-0.20, -0.25, 0.83]
-    high: [ 0.10,  0.25, 0.93]
+    low:  [-0.25, -0.15, 0.83]
+    high: [ 0.10,  0.15, 0.88]
 
 
 task:

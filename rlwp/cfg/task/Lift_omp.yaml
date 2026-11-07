@@ -11,8 +11,8 @@ env:
   gripper_steps: 10
   orientation_hold: True                     # keep the gripper pointing down between waypoints
   workspace:                                 # absolute grip-point bounds (world frame, m), from omp_tools/check_omp_workspace.py
-    low:  [-0.20, -0.25, 0.83]
-    high: [ 0.05,  0.25, 0.98]
+    low:  [-0.25, -0.25, 0.83]               # (9 mm base plate; the top at 0.88 = start height leaves ~5 cm to lift the cube)
+    high: [ 0.05,  0.25, 0.88]
 
 
 task:

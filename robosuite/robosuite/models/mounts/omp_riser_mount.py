@@ -1,5 +1,5 @@
 """
-Table-top riser block for the OpenMANIPULATOR-P.
+Base plate (TurtleBot3 Waffle Pi waffle plate, ~9 mm) under the OpenMANIPULATOR-P.
 """
 import numpy as np
 
@@ -9,7 +9,7 @@ from robosuite.utils.mjcf_utils import xml_path_completion
 
 class OMPRiserMount(MountModel):
     """
-    10 cm riser block that the OpenMANIPULATOR-P base sits on (placed on the table top).
+    ~9 mm base plate (TurtleBot3 Waffle Pi waffle plate) that the OpenMANIPULATOR-P base sits on, on the table top.
 
     Args:
         idn (int or str): Number or some other unique identification string for this mount instance

@@ -7,7 +7,7 @@ from robosuite.utils.mjcf_utils import xml_path_completion
 class OpenManipulatorP(ManipulatorModel):
     """
     OpenMANIPULATOR-P (RM-P60-RNH) is a 6-DoF arm from ROBOTIS, here with the OpenMANIPULATOR-X gripper,
-    sitting on a 10 cm riser on the table top.
+    sitting on a ~9 mm base plate (TurtleBot3 Waffle Pi waffle plate) on the table top.
 
     Args:
         idn (int or str): Number or some other unique identification string for this robot instance
@@ -31,12 +31,13 @@ class OpenManipulatorP(ManipulatorModel):
     @property
     def init_qpos(self):
         # Gripper pointing straight down, grip point 0.22 m in front of the base and 0.07 m above it
-        # (0.17 m above the table). J5 = 1.213 keeps 0.36 rad to its limit and stays clear of the J5 = 0 singularity.
+        # (0.079 m above the table with the 9 mm base plate). J5 = 1.213 keeps 0.36 rad to its limit and stays
+        # clear of the J5 = 0 singularity.
         return np.array([0.0, -0.235, 0.592, 0.0, 1.213, 0.0])
 
     @property
     def base_xpos_offset(self):
-        # The robot stands on the table top (riser bottom at z = 0.8, the table height used by Lift / Stack / Door)
+        # The robot stands on the table top (base plate bottom at z = 0.8, the table height used by Lift / Stack / Door)
         # instead of on a floor pedestal: OM-P's 0.645 m reach needs the objects ~0.3 m from the base.
         return {
             "bins": (-0.5, -0.1, 0),  # PickPlace: not adapted yet (T7)

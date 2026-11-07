@@ -22,7 +22,7 @@ CONTROLLER_DIR = os.path.join(HERE, "..", "robosuite", "robosuite", "controllers
 
 XS = np.round(np.arange(-0.35, 0.151, 0.05), 3)
 YS = np.round(np.arange(0.0, 0.251, 0.05), 3)  # mirrored to -y
-ZS = np.round(np.arange(0.83, 1.081, 0.05), 3)  # 0.83: fingertips ~9 mm above the 0.80 table
+ZS = np.round(np.arange(0.83, 1.031, 0.025), 3)  # 0.83: fingertips ~9 mm above the 0.80 table
 
 # Object spawn regions (world frame x/y, from the bundled envs) that each task's waypoints must cover
 TASK_REGIONS = {
