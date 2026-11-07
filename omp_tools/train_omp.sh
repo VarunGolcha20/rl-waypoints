@@ -50,6 +50,10 @@ done
 if [ "$NAME" = "test" ] || [[ "$NAME" == test_* ]]; then
     echo "run name '$NAME' is reserved: the shipped Panda models live in models/<env>/test" >&2; exit 2
 fi
+# rlwp's PickPlace needs the top-level `object`; default to the can unless one was given
+if [[ "$TASK" == PickPlace* ]] && ! printf '%s\n' "${EXTRA[@]}" | grep -q '^object='; then
+    EXTRA+=(object=can)
+fi
 if [ "$SMOKE" = 1 ]; then
     EXTRA=(task.task.epoch_wp=6 task.task.batch_size=3 task.task.exploration_epoch=2
            task.task.ensemble_sampling_epoch=3 task.task.averaging_noise_epoch=4 task.task.rand_reset_epoch=4

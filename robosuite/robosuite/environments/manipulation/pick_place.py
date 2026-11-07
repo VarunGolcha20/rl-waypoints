@@ -6,6 +6,7 @@ import numpy as np
 import robosuite.utils.transform_utils as T
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 from robosuite.models.arenas import BinsArena
+from robosuite.models.arenas.robot_stand import add_robot_stand
 from robosuite.models.objects import (
     BreadObject,
     BreadVisualObject,
@@ -67,6 +68,13 @@ class PickPlace(SingleArmEnv):
         bin1_pos (3-tuple): Absolute cartesian coordinates of the bin initially holding the objects
 
         bin2_pos (3-tuple): Absolute cartesian coordinates of the goal bin
+
+        bin_scale (float): scales both bins (and the object spawn area / target compartments) in x and y. 1 = original.
+
+        bin_wall_height (None or float): wall height above the bin body origin (the floor top is at +0.02).
+            None keeps the original 0.1 m.
+
+        lift_height (float): an object counts as lifted (reward stage) above bin2's z + this height.
 
         use_camera_obs (bool): if True, every observation includes rendered image(s)
 
@@ -194,8 +202,14 @@ class PickPlace(SingleArmEnv):
         renderer="mujoco",
         renderer_config=None,
         use_latch=False,
+        bin_scale=1.0,
+        bin_wall_height=None,
+        lift_height=0.1,
     ):
         self.obj_type = object_type
+        self.bin_scale = bin_scale
+        self.bin_wall_height = bin_wall_height
+        self.lift_height = lift_height
 
         # task settings
         self.single_object_mode = single_object_mode
@@ -383,7 +397,7 @@ class PickPlace(SingleArmEnv):
         # lifting reward for picking up an object
         r_lift = 0.0
         if active_objs and r_grasp > 0.0:
-            z_target = self.bin2_pos[2] + 0.1
+            z_target = self.bin2_pos[2] + self.lift_height
             object_z_locs = self.sim.data.body_xpos[[self.obj_body_id[active_obj.name] for active_obj in active_objs]][
                 :, 2
             ]
@@ -454,13 +468,18 @@ class PickPlace(SingleArmEnv):
 
         # each object should just be sampled in the bounds of the bin (with some tolerance)
         for idx, obj in enumerate(self.objects):
+            x_range, y_range = [-bin_x_half/2, bin_x_half/2], [-bin_y_half/2, bin_y_half/2]
+            # Small bins (bin_scale < 1) can't hold all four objects. In single-object mode the unused ones are removed
+            # after placement anyway, so spawn them off to the side instead of in the bin
+            if self.bin_scale != 1.0 and self.single_object_mode == 2 and idx != self.object_id:
+                x_range = y_range = [1.0 + 0.3 * idx, 1.0 + 0.3 * idx]
 
             self.placement_initializer.append_sampler(
                 sampler=UniformRandomSampler(
                     name=f"{obj}CollisionObjectSampler",
                     mujoco_objects=obj,
-                    x_range=[-bin_x_half/2, bin_x_half/2],
-                    y_range=[-bin_y_half/2, bin_y_half/2],
+                    x_range=x_range,
+                    y_range=y_range,
                     # x_range=[0.1, 0.1] if idx == 0 else [-0.05, -0.05] if idx == 1 else [0.1, 0.1] if idx == 3 else [-0.05, -0.05],
                     # y_range=[-0.05, -0.05] if idx == 0 else [0.15, 0.15] if idx == 1 else [-0.05, -0.05] if idx == 2 else [0.15, 0.15],
                     rotation=0.0,
@@ -521,13 +540,34 @@ class PickPlace(SingleArmEnv):
         xpos = self.robots[0].robot_model.base_xpos_offset["bins"]
         self.robots[0].robot_model.set_base_xpos(xpos)
 
-        # load model for table top workspace
+        # load model for table top workspace (bin size scaled by bin_scale; 1 = original)
         mujoco_arena = BinsArena(
-            bin1_pos=self.bin1_pos, table_full_size=self.table_full_size, table_friction=self.table_friction
+            bin1_pos=self.bin1_pos,
+            table_full_size=np.array(self.table_full_size) * [self.bin_scale, self.bin_scale, 1],
+            table_friction=self.table_friction,
         )
 
         # Arena always gets set to zero origin
         mujoco_arena.set_origin([0, 0, 0])
+
+        # Optional smaller / lower bins: scale every bin geom about the bin centre, and set the wall height
+        if self.bin_scale != 1.0 or self.bin_wall_height is not None:
+            for bin_body in (mujoco_arena.bin1_body, mujoco_arena.bin2_body):
+                for geom in bin_body.findall("geom"):
+                    pos = np.array([float(v) for v in geom.get("pos").split()])
+                    size = np.array([float(v) for v in geom.get("size").split()])
+                    is_wall = abs(pos[2] - 0.05) < 1e-6
+                    pos[:2] *= self.bin_scale
+                    if geom.get("type") == "box":
+                        size[:2] = np.maximum(size[:2] * self.bin_scale, 0.005)
+                        if is_wall and self.bin_wall_height is not None:
+                            pos[2] = size[2] = self.bin_wall_height / 2.0
+                    geom.set("pos", " ".join(str(v) for v in pos))
+                    geom.set("size", " ".join(str(v) for v in size))
+
+        # Robots standing on a table top (e.g. OpenManipulatorP) get a stand: this arena has no table under them
+        if getattr(self.robots[0].robot_model, "table_mounted", False):
+            add_robot_stand(mujoco_arena, xpos[:2], xpos[2])
 
         # store some arena attributes
         self.bin_size = mujoco_arena.table_full_size

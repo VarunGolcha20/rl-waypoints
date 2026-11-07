@@ -22,12 +22,18 @@ CONTROLLER_DIR = os.path.join(HERE, "..", "robosuite", "robosuite", "controllers
 
 XS = np.round(np.arange(-0.35, 0.151, 0.05), 3)
 YS = np.round(np.arange(0.0, 0.251, 0.05), 3)  # mirrored to -y
-ZS = np.round(np.arange(0.83, 1.031, 0.025), 3)  # 0.83: fingertips ~9 mm above the 0.80 table
+# 0.825: fingertips 4 mm above the 0.80 table (grasp height for flat objects); then 0.83 and 2.5 cm steps
+ZS = np.round(np.r_[0.825, np.arange(0.83, 1.031, 0.025)], 3)
 
-# Object spawn regions (world frame x/y, from the bundled envs) that each task's waypoints must cover
+# Per task (adapted OM-P layouts, rlwp/cfg/task/<Task>_omp.yaml): the x/y region the waypoints must reach (objects,
+# grasp points and drop / pull targets), the lowest acceptable box ceiling, and the task's z shift relative to this grid
+# (the grid is measured with the base on a 0.80 m table; NutAssembly's table is at 0.82)
 TASK_REGIONS = {
-    "Lift": ([-0.03, -0.03], [0.03, 0.03]),  # cube
-    "Stack": ([-0.08, -0.08], [0.08, 0.08]),  # cubeA x [-0.08, -0.04], cubeB x [0.02, 0.08], both y +-0.08
+    "Lift": ([-0.03, -0.03], [0.03, 0.03], 0.86, 0.0),  # cube; success = cube centre > 0.84 (+ margin)
+    "Stack": ([-0.04, -0.05], [0.01, 0.16], 0.905, 0.0),  # cubeA in front, cubeB 12-16 cm to the side; carry high
+    "NutAssembly": ([-0.06, -0.18], [-0.04, 0.03], 0.885, 0.02),  # handle grasp points, over the round peg
+    "PickPlace": ([-0.08, -0.065], [0.025, 0.125], 0.905, 0.0),  # can in the object bin, target compartment
+    "Door": ([-0.07, -0.01], [0.01, 0.09], 0.86, 0.0),  # handle bar, pulled 0.35 rad along the arc
 }
 PARKED_CUBE = [0.35, 0.35, 0.82, 1, 0, 0, 0]  # table corner, outside the grid
 
@@ -38,6 +44,7 @@ def main():
     ap.add_argument("--tol", type=float, default=0.01)
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--out", default=os.path.join(HERE, "out"))
+    ap.add_argument("--reuse", action="store_true", help="recompute the boxes from the saved grid results instead of simulating")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
@@ -49,8 +56,14 @@ def main():
     lo, hi = env.sim.model.jnt_range[robot._ref_joint_indexes].T
     eef_body = env.sim.model.body_name2id(robot.robot_model.eef_name)
 
+    path = os.path.join(args.out, "workspace_%s.json" % args.controller)
     res = {}
-    for x, y, z in itertools.product(XS, YS, ZS):
+    if args.reuse:
+        snap = lambda v, grid: grid[np.abs(grid - v).argmin()]  # older files stored 2 decimals
+        for k, v in json.load(open(path)).items():
+            x, y, z = (float(c) for c in k.split(","))
+            res[(snap(x, XS), snap(y, YS), snap(z, ZS))] = v
+    for x, y, z in ([] if args.reuse else itertools.product(XS, YS, ZS)):
         env.reset()
         env.sim.data.set_joint_qpos(env.cube.joints[0], PARKED_CUBE)
         env.sim.forward()
@@ -81,16 +94,18 @@ def main():
         print("\n|y| = %.2f   tracking error (cm), '.' = within tolerance" % y)
         print("   z \\ x " + "".join("%6.2f" % x for x in XS))
         for z in ZS[::-1]:
-            print("  %.2f  " % z + "".join("     ." if ok[(x, y, z)] else "%6.0f" % (100 * res[(x, y, z)]["err"]) for x in XS))
+            print(" %.3f  " % z + "".join("     ." if ok[(x, y, z)] else "%6.0f" % (100 * res[(x, y, z)]["err"]) for x in XS))
 
     # Per task: largest box [x0, x1] x [-yh, yh] x [z0, z1] (grid-aligned) containing the task's spawn region,
     # with every grid point inside it within tolerance
-    for task, (rlo, rhi) in TASK_REGIONS.items():
+    for task, (rlo, rhi, ztop, zshift) in TASK_REGIONS.items():
         best, best_vol = None, -1
         for i0, i1 in itertools.combinations_with_replacement(range(len(XS)), 2):
             if not (XS[i0] <= rlo[0] and rhi[0] <= XS[i1]):
                 continue
             for k0, k1 in itertools.combinations_with_replacement(range(len(ZS)), 2):
+                if ZS[k1] < ztop:
+                    continue
                 for jh in range(len(YS)):
                     if YS[jh] < max(-rlo[1], rhi[1]):
                         continue
@@ -99,18 +114,18 @@ def main():
                         vol = (XS[i1] - XS[i0]) * YS[jh] * (ZS[k1] - ZS[k0])
                         if vol > best_vol:
                             best, best_vol = (XS[i0], XS[i1], YS[jh], ZS[k0], ZS[k1]), vol
-        print("\n%s (objects x [%.2f, %.2f], y [%.2f, %.2f]):" % (task, rlo[0], rhi[0], rlo[1], rhi[1]))
+        print("\n%s (objects x [%.2f, %.2f], y [%.2f, %.2f], ceiling >= %.3f):" % (task, rlo[0], rhi[0], rlo[1], rhi[1], ztop))
         if best is None:
-            print("  no fully reachable box contains the spawn region -> move the base or shrink the spawn region")
+            print("  no fully reachable box contains the spawn region up to that ceiling -> move the base or shrink the spawn region")
             continue
         x0, x1, yh, z0, z1 = best
-        print("  box x [%.2f, %.2f], y [%.2f, %.2f], z [%.2f, %.2f]  (relative to start eef: dx [%+.2f, %+.2f], "
-              "dz [%+.2f, %+.2f])" % (x0, x1, -yh, yh, z0, z1, x0 - start[0], x1 - start[0], z0 - start[2], z1 - start[2]))
-        print("  rlwp task YAML (env:):\n    workspace:\n      low:  [%.2f, %.2f, %.2f]\n      high: [%.2f, %.2f, %.2f]" % (
-            x0, -yh, z0, x1, yh, z1))
+        print("  box x [%.2f, %.2f], y [%.2f, %.2f], z [%.3f, %.3f]  (relative to start eef: dx [%+.2f, %+.2f], "
+              "dz [%+.3f, %+.3f])" % (x0, x1, -yh, yh, z0, z1, x0 - start[0], x1 - start[0], z0 - start[2], z1 - start[2]))
+        print("  rlwp task YAML (env:)%s:\n    workspace:\n      low:  [%.2f, %.2f, %.3f]\n      high: [%.2f, %.2f, %.3f]" % (
+            " (z shifted by %+.2f for this task's table)" % zshift if zshift else "", x0, -yh, z0 + zshift, x1, yh, z1 + zshift))
 
-    path = os.path.join(args.out, "workspace_%s.json" % args.controller)
-    json.dump({"%.2f,%.2f,%.2f" % k: v for k, v in res.items()}, open(path, "w"), indent=1)
+    if not args.reuse:
+        json.dump({"%.3f,%.3f,%.3f" % k: v for k, v in res.items()}, open(path, "w"), indent=1)
     print("\nraw results:", os.path.abspath(path))
 
 

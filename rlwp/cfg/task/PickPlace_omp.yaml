@@ -1,0 +1,37 @@
+# PickPlace (can) adapted to the OpenMANIPULATOR-P on its 9 mm base plate.
+# Run with task=PickPlace_omp object=can (rlwp's PickPlace needs the top-level `object`; with train_omp.sh: -- object=can).
+# Same schedule as PickPlace.yaml (paper values). The original bins (0.4 x 0.5 m, 8 cm walls, 0.6 m away) are out of
+# reach for OM-P, so env_kwargs makes them smaller and lower and puts them in front of the robot; see README_OMP.md.
+name: PickPlace
+
+env:
+  robot: 'OpenManipulatorP'
+  controller: 'default_open_manipulator_p'
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 15
+  orientation_hold: True
+  env_kwargs:
+    bin_scale: 0.4                       # bins 0.16 x 0.20 m (was 0.39 x 0.49), spawn area / compartments scale too
+    bin_wall_height: 0.035               # 1.5 cm lip above the bin floor (was 8 cm): the can is carried in a straight line
+    bin1_pos: [0.01, -0.04, 0.8]         # object bin straight in front of the start pose (gripper approaches head-on);
+                                         #   its back wall 2 cm ahead of the start fingers, so they pass over it high
+    bin2_pos: [-0.04, 0.17, 0.8]         # target bin to the side; the can's compartment is ~0.27 m from the base
+    lift_height: 0.09                    # lift reward stage: can centre > 0.89 (3 cm off the bin floor; was 0.90)
+  workspace:                             # from omp_tools/check_omp_workspace.py (9 mm base plate)
+    low:  [-0.20, -0.20, 0.825]
+    high: [ 0.05,  0.20, 0.905]
+
+
+task:
+  action_space: 0.75
+  batch_size: 30
+  epoch_wp: 500
+
+  exploration_epoch: 75
+  ensemble_sampling_epoch: 250
+  averaging_noise_epoch: 400
+  rand_reset_epoch: 400
+
+  num_eval: 100

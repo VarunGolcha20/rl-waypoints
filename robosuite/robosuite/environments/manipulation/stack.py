@@ -168,7 +168,13 @@ class Stack(SingleArmEnv):
         single_object_mode=None,
         object_type='test',
         use_latch=False,
+        cubeA_x_range=(-0.08, -0.04),
+        cubeA_y_range=(-0.08, 0.08),
+        cubeB_x_range=(0.02, 0.08),
+        cubeB_y_range=(-0.08, 0.08),
     ):
+        # cube spawn ranges (relative to the table centre); defaults are the original layout
+        self.cube_ranges = [list(cubeA_x_range), list(cubeA_y_range), list(cubeB_x_range), list(cubeB_y_range)]
         # settings for table top
         self.table_full_size = table_full_size
         self.table_friction = table_friction
@@ -364,8 +370,8 @@ class Stack(SingleArmEnv):
             self.placement_initializer1 = UniformRandomSampler(
                 name="ObjectSampler",
                 mujoco_objects=self.cubeA,
-                x_range=[-0.08, -0.04],
-                y_range=[-0.08, 0.08],
+                x_range=self.cube_ranges[0],
+                y_range=self.cube_ranges[1],
                 rotation=0,
                 rotation_axis='z',
                 ensure_object_boundary_in_range=False,
@@ -382,8 +388,8 @@ class Stack(SingleArmEnv):
             self.placement_initializer2 = UniformRandomSampler(
                 name="ObjectSampler",
                 mujoco_objects=self.cubeB,
-                x_range=[0.02, 0.08],
-                y_range=[-0.08, 0.08],
+                x_range=self.cube_ranges[2],
+                y_range=self.cube_ranges[3],
                 rotation=0,
                 rotation_axis='z',
                 ensure_object_boundary_in_range=False,

@@ -13,6 +13,9 @@ class OpenManipulatorP(ManipulatorModel):
         idn (int or str): Number or some other unique identification string for this robot instance
     """
 
+    # base_xpos_offset["table"] puts the base plate on a 0.8 m table top; envs with another table height shift it
+    table_mounted = True
+
     def __init__(self, idn=0):
         super().__init__(xml_path_completion("robots/open_manipulator_p/robot.xml"), idn=idn)
 
@@ -40,7 +43,9 @@ class OpenManipulatorP(ManipulatorModel):
         # The robot stands on the table top (base plate bottom at z = 0.8, the table height used by Lift / Stack / Door)
         # instead of on a floor pedestal: OM-P's 0.645 m reach needs the objects ~0.3 m from the base.
         return {
-            "bins": (-0.5, -0.1, 0),  # PickPlace: not adapted yet (T7)
+            # PickPlace: same place as for the table tasks, on a stand at bin height (added by the env). The original
+            # bins are out of reach; use the smaller, lower bins from rlwp/cfg/task/PickPlace_omp.yaml
+            "bins": (-0.32, 0.0, 0.8),
             "empty": (-0.3, 0, 0),
             "table": lambda table_length: (-table_length / 2 + 0.08, 0, 0.8),
         }

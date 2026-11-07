@@ -4,6 +4,7 @@ import numpy as np
 
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 from robosuite.models.arenas import TableArena
+from robosuite.models.arenas.robot_stand import add_robot_stand
 from robosuite.models.objects import DoorObject
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.observables import Observable, sensor
@@ -50,6 +51,20 @@ class Door(SingleArmEnv):
 
         use_latch (bool): if True, uses a spring-loaded handle and latch to "lock" the door closed initially
             Otherwise, door is instantiated with a fixed handle
+
+        door_table_full_size, door_table_offset (3-tuple): size and top-centre position of the table the door stands on.
+            Defaults: the original (0.8, 0.3, 0.05) at (-0.2, -0.35, 0.8).
+
+        door_x_range, door_y_range (2-tuple), door_rotation (2-tuple): door placement relative to the table top centre,
+            and its yaw range. Defaults: the original values.
+
+        robot_stand_half_size (float): footprint of the stand added under table-top robots (e.g. OpenManipulatorP).
+
+        door_scale (float): uniform scale of the door object (frame, panel, handle; masses and inertias follow).
+            1 = original.
+
+        door_handle_protrusion (float): multiplies how far the handle stands off the door (stem length and bar
+            offset), e.g. so a wide gripper housing clears the panel. 1 = original.
 
         use_camera_obs (bool): if True, every observation includes rendered image(s)
 
@@ -161,10 +176,23 @@ class Door(SingleArmEnv):
         renderer_config=None,
         single_object_mode=None,
         object_type=None,
+        door_table_full_size=(0.8, 0.3, 0.05),
+        door_table_offset=(-0.2, -0.35, 0.8),
+        door_x_range=(0.07, 0.09),
+        door_y_range=(-0.01, 0.01),
+        door_rotation=(-np.pi / 2.0 - 0.25, -np.pi / 2.0),
+        robot_stand_half_size=0.08,
+        door_scale=1.0,
+        door_handle_protrusion=1.0,
     ):
-        # settings for table top (hardcoded since it's not an essential part of the environment)
-        self.table_full_size = (0.8, 0.3, 0.05)
-        self.table_offset = (-0.2, -0.35, 0.8)
+        # settings for table top (originally hardcoded; now arguments with the original values as defaults so the
+        # door can be put on a lower table for smaller robots)
+        self.table_full_size = tuple(door_table_full_size)
+        self.table_offset = tuple(door_table_offset)
+        self.door_ranges = (list(door_x_range), list(door_y_range), tuple(door_rotation))
+        self.robot_stand_half_size = robot_stand_half_size
+        self.door_scale = door_scale
+        self.door_handle_protrusion = door_handle_protrusion
 
         # reward configuration
         self.use_latch = use_latch
@@ -260,7 +288,8 @@ class Door(SingleArmEnv):
         super()._load_model()
 
         # Adjust base pose accordingly
-        xpos = self.robots[0].robot_model.base_xpos_offset["table"](self.table_full_size[0])
+        # (robot placement stays relative to the original 0.8 m table, also when the door table is resized)
+        xpos = self.robots[0].robot_model.base_xpos_offset["table"](0.8)
         self.robots[0].robot_model.set_base_xpos(xpos)
 
         # load model for table top workspace
@@ -271,6 +300,11 @@ class Door(SingleArmEnv):
 
         # Arena always gets set to zero origin
         mujoco_arena.set_origin([0, 0, 0])
+
+        # Robots standing on a table top (e.g. OpenManipulatorP) get their own stand at 0.8 m: the door's table is not
+        # under them (and may be lower)
+        if getattr(self.robots[0].robot_model, "table_mounted", False):
+            add_robot_stand(mujoco_arena, xpos[:2], 0.8, half_size=self.robot_stand_half_size)
 
         # Modify default agentview camera
         mujoco_arena.set_camera(
@@ -286,6 +320,13 @@ class Door(SingleArmEnv):
             damping=0.1,
             lock=self.use_latch,
         )
+        if self.door_scale != 1.0:
+            # the object's geometry lives in get_obj() (a copy); placement offsets come from the original worldbody sites
+            _scale_mjcf_tree(self.door.get_obj(), self.door_scale)
+            _scale_mjcf_tree(self.door.worldbody, self.door_scale)
+        if self.door_handle_protrusion != 1.0:
+            for tree in (self.door.get_obj(), self.door.worldbody):
+                _stretch_handle(tree, self.door_handle_protrusion)
 
         # Create placement initializer
         if self.placement_initializer is not None:
@@ -298,9 +339,9 @@ class Door(SingleArmEnv):
                 # x_range=[0.08, 0.08],
                 # y_range=[-0.0, 0.0],
                 # rotation=(-np.pi / 2.0 , -np.pi / 2.0),
-                x_range=[0.07, 0.09],
-                y_range=[-0.01, 0.01],
-                rotation=(-np.pi / 2.0 - 0.25, -np.pi / 2.0),
+                x_range=self.door_ranges[0],
+                y_range=self.door_ranges[1],
+                rotation=self.door_ranges[2],
                 rotation_axis="z",
                 ensure_object_boundary_in_range=False,
                 ensure_valid_placement=True,
@@ -464,3 +505,36 @@ class Door(SingleArmEnv):
             np.array: (x,y,z) distance between handle and eef
         """
         return self._handle_xpos - self._eef_xpos
+
+
+def _scale_mjcf_tree(root, scale):
+    """Uniformly scales all bodies / geoms / sites / joints / inertials under @root (primitive geoms only)."""
+    def scaled(attr_value, factor):
+        return " ".join(str(float(v) * factor) for v in attr_value.split())
+
+    for el in root.iter():
+        if el.get("pos") is not None:
+            el.set("pos", scaled(el.get("pos"), scale))
+        if el.tag in ("geom", "site"):
+            if el.get("size") is not None:
+                el.set("size", scaled(el.get("size"), scale))
+            if el.get("fromto") is not None:
+                el.set("fromto", scaled(el.get("fromto"), scale))
+        if el.tag == "inertial":
+            el.set("mass", str(float(el.get("mass")) * scale**3))
+            if el.get("diaginertia") is not None:
+                el.set("diaginertia", scaled(el.get("diaginertia"), scale**5))
+
+
+def _stretch_handle(root, factor):
+    """Moves the door handle bar (and its site) away from the door along the handle stem, and lengthens the stem."""
+    for el in root.iter():
+        name = el.get("name") or ""
+        if el.tag in ("geom", "site") and (name.endswith("handle") or name.endswith("handle_visual")):
+            pos = [float(v) for v in el.get("pos").split()]
+            pos[1] *= factor  # the handle stands off the door along the latch body's -y
+            el.set("pos", " ".join(str(v) for v in pos))
+        elif el.tag == "geom" and "handle_base" in name and el.get("fromto") is not None:
+            ft = [float(v) for v in el.get("fromto").split()]
+            ft[4] *= factor
+            el.set("fromto", " ".join(str(v) for v in ft))

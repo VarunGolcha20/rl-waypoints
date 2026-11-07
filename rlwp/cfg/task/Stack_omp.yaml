@@ -1,8 +1,5 @@
 # Stack with the OpenMANIPULATOR-P + OM-X gripper. Run with task=Stack_omp.
 # Same schedule as Stack.yaml (paper values); the env block adds the OM-P settings.
-# WARNING (9 mm base plate): not viable in this layout. cubeB spawns 0.35-0.40 m from the base, where the arm cannot
-# carry cubeA above cubeB's top (scripted stacking: 1/10). Needs the base moved closer, a higher base, or a smaller
-# spawn region before training (see IMPLEMENTATION_LOG.md, T3b).
 name: Stack
 
 env:
@@ -13,9 +10,14 @@ env:
   wp_steps: 50
   gripper_steps: 15
   orientation_hold: True
-  workspace:                                 # covers cubeA x [-0.08, -0.04] and cubeB x [0.02, 0.08], y +-0.08
-    low:  [-0.25, -0.15, 0.83]
-    high: [ 0.10,  0.15, 0.88]
+  env_kwargs:                                # adapted layout (original: cubeA x [-0.08, -0.04], cubeB x [0.02, 0.08], both y +-0.08)
+    cubeA_x_range: [-0.03, 0.01]             # cubeA straight in front of the start pose (like Lift): the gripper's
+    cubeA_y_range: [-0.05, -0.01]            #   fingers open along y, so a sideways approach would push the cube away
+    cubeB_x_range: [-0.04, 0.00]             # cubeB >= 13 cm to the side: rlwp carries cubeA in a straight line to
+    cubeB_y_range: [0.12, 0.16]              #   the drop point, so cubeA and the leading finger must rise 5 cm first
+  workspace:                             # from omp_tools/check_omp_workspace.py (9 mm base plate)
+    low:  [-0.20, -0.20, 0.825]
+    high: [ 0.05,  0.20, 0.905]
 
 
 task:

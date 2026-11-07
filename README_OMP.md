@@ -26,7 +26,13 @@ export MUJOCO_GL=egl          # headless rendering for the check scripts; the tr
 ```bash
 PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/demo_omp_viewer.py           # scripted pick in Lift, loops
 PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/demo_omp_viewer.py --static  # robot at its start pose
+PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/show_omp_tasks.py             # every task's environment, one window each
+PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/show_omp_tasks.py --env Stack # one task
+MUJOCO_GL=egl python omp_tools/show_omp_tasks.py --snapshot               # PNG per task in omp_tools/out/
 ```
+`show_omp_tasks.py` shows the environments only, with the adapted `_omp` layouts (it reads `env_kwargs` from the
+task YAMLs): the robot holds its start pose while the physics runs (no learned or
+scripted motion). Close a window to move on to the next task. Backspace re-randomises the objects, and Ctrl + right-drag pushes them.
 MuJoCo viewer controls: left-drag rotate, right-drag pan, scroll zoom, `0` shows collision geoms. `PYGLFW_LIBRARY_VARIANT=x11`
 avoids GLFW's native-Wayland backend.
 
@@ -37,7 +43,8 @@ avoids GLFW's native-Wayland backend.
 | `python omp_tools/check_omp_arm.py` | arm MJCF alone: FK, self-collision, torque headroom, PD hold | ~10 s |
 | `python omp_tools/check_omx_gripper.py` | gripper alone: opening range, grasp + lift of 24–50 mm cubes | ~30 s |
 | `python omp_tools/check_omp_env.py [--env Lift]` | robot in a robosuite task: placement, OSC response, scripted pick | ~30 s |
-| `python omp_tools/check_omp_workspace.py` | waypoint reachability grid → `workspace:` bounds for the task YAMLs | ~4.5 min |
+| `python omp_tools/check_omp_tasks.py [--tasks ...]` | every `_omp` task solvable with 2 waypoints inside its workspace box (scripted waypoints through rlwp's action rule) | ~3 min |
+| `python omp_tools/check_omp_workspace.py [--reuse]` | waypoint reachability grid → `workspace:` bounds for the task YAMLs (`--reuse` recomputes the boxes from the saved grid) | ~7 min (`--reuse`: seconds) |
 
 Renders and raw results go to `omp_tools/out/` (git-ignored).
 
@@ -57,8 +64,12 @@ omp_tools/train_omp.sh -t Lift_omp -s "0 1 2" -n omp_lift
 # 3) Panda baseline with the same code and seeds (original Lift config)
 omp_tools/train_omp.sh -t Lift -s "0 1 2" -n panda_lift
 
-# 4) Stack on OM-P (~40 min per seed). NOT viable yet with the 9 mm base plate (see §5)
+# 4) the other adapted tasks. Measured rate ~5.3 s/episode with 3 seeds in parallel: Stack / Door ~55 min,
+#    NutAssembly ~60 min, PickPlace ~90 min (Lift took ~35 min)
 omp_tools/train_omp.sh -t Stack_omp -s "0 1 2" -n omp_stack
+omp_tools/train_omp.sh -t NutAssembly_omp -s "0 1 2" -n omp_nut
+omp_tools/train_omp.sh -t PickPlace_omp -s "0 1 2" -n omp_pickplace     # object=can is added automatically
+omp_tools/train_omp.sh -t Door_omp -s "0 1 2" -n omp_door
 ```
 
 Options:
@@ -123,24 +134,40 @@ New keys. All are optional, and leaving them out gives the original behaviour:
 | `env.controller` | task YAML | robosuite controller config name (`robosuite/robosuite/controllers/config/<name>.json`). Unset = generic `OSC_POSE` |
 | `env.workspace.low/high` | task YAML | absolute world-frame bounds (m) for the waypoint positions. Used by exploration, the SLSQP constraint and the injected noise. Unset = ±`action_space` around the start pose |
 | `env.orientation_hold` | task YAML | for position-only tasks, actively keeps the gripper at its start orientation (pointing down) |
+| `env.env_kwargs` | task YAML | extra `suite.make` arguments, e.g. an adapted task layout (see below). Unset = the original call |
 
-OM-P task configs: `cfg/task/Lift_omp.yaml`, `cfg/task/Stack_omp.yaml`. They use the paper's schedules (so the
-curves compare directly with Panda), the `default_open_manipulator_p` controller (coupled OSC), orientation hold,
-and the workspace boxes from `check_omp_workspace.py`:
+OM-P task configs: `cfg/task/{Lift,Stack,NutAssembly,PickPlace,Door}_omp.yaml`. They use the paper's schedules
+(so the curves compare directly with Panda), the `default_open_manipulator_p` controller (coupled OSC), orientation
+hold, position-only waypoints (`state_dim: 4`), and the workspace boxes from `check_omp_workspace.py`.
+
+**The tasks are adapted to the OM-P on its 9 mm base.** With the gripper pointing down, the arm keeps the grip point
+within ~0.83–0.905 m (3–10 cm above the table) and ~0.15–0.40 m from its base. rlwp moves in a straight line between
+waypoints, and the OM-X fingers open sideways (along y). So objects are approached head-on (along x), and anything
+carried sideways must start far enough from obstacles to rise over them. The original robosuite layouts don't fit
+that. The `_omp` configs change them through `env.env_kwargs` (new environment arguments; their defaults reproduce the
+original tasks, and Panda results are bit-identical):
+
+| Task | What changed (`env_kwargs`) | Why |
+|---|---|---|
+| Lift_omp | nothing | fits as is |
+| Stack_omp | cubeA spawns straight in front of the start pose (x −0.03…0.01, y −0.05…−0.01), cubeB 12–16 cm to the side (y 0.12…0.16) | sideways approach would push cubeA away with the fingers. cubeA must rise over cubeB before reaching it |
+| NutAssembly_omp | nut handle points at the robot (`nut_rotation` π), nut spawns at x 0.01…0.03, y ±0.03. Round peg at (0.02, −0.18), **3 cm tall** (was 13 cm). Square peg moved aside. Lift stage 5 cm | fingers would land on the ring before the handle. The nut can only be carried ~6 cm high |
+| PickPlace_omp (can) | bins scaled 0.4× (0.16 × 0.20 m) with **1.5 cm lips** (were 8 cm), object bin straight ahead, target bin to the side. Robot on a stand at bin height. Lift stage 3 cm | original bins 0.6 m away with walls the can couldn't clear |
+| Door_omp | door scaled 0.75×, handle stands off 1.5× further (bar ~10 cm off the panel), on a lower table (handle at 0.86 m) in line with the start pose. Robot on a stand. Position-only waypoints | original handle 27 cm above the base. The 13 cm-wide gripper housing must clear the panel |
+
+Every adapted task is solvable with rlwp's 2-waypoint scheme inside its workspace box. `omp_tools/check_omp_tasks.py`
+runs a hand-designed waypoint pair through rlwp's exact action rule: **20/20 successes for all five tasks**.
 
 | Task | workspace low | workspace high |
 |---|---|---|
-| Lift_omp | [-0.25, -0.25, 0.83] | [0.05, 0.25, 0.88] |
-| Stack_omp | [-0.25, -0.15, 0.83] | [0.10, 0.15, 0.88] |
+| Lift_omp, Stack_omp, PickPlace_omp, Door_omp | [-0.20, -0.20, 0.825] | [0.05, 0.20, 0.905] |
+| NutAssembly_omp (table at 0.82) | [-0.20, -0.20, 0.845] | [0.00, 0.20, 0.950] |
 
-With the 9 mm base plate the reachable band is only 0.83–0.88 m (3–8 cm above the table). That is enough for Lift
-(the cube must rise ~2 cm), but **not for Stack**: cubeB spawns 0.35–0.40 m from the base, where cubeA can't be carried
-above it (scripted stacking 1/10). Stack needs the base moved closer, a higher base, or a smaller spawn region first.
+If you change the robot model, its base placement, the controller or a task layout, rerun
+`omp_tools/check_omp_workspace.py` (regions per task in its `TASK_REGIONS`) and `omp_tools/check_omp_tasks.py`.
 
-If you change the robot model, its base placement or the controller, rerun `omp_tools/check_omp_workspace.py` and paste
-the printed `workspace:` blocks into the task YAMLs.
-
-Door, NutAssembly and PickPlace don't have OM-P configs yet. Their layouts need adapting first (see `RETRAINING_PLAN.md` §7).
+PickPlace needs rlwp's top-level `object`: `train_omp.sh` adds `object=can` for PickPlace tasks automatically. With
+`main.py` directly, pass `object=can`.
 
 ## 6. Robot model summary
 

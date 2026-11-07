@@ -86,6 +86,17 @@ class NutAssembly(SingleArmEnv):
             which type of nut (round or square) will be spawned on every environment
             reset. Only used if @single_object_mode is 2.
 
+        peg_positions (None or 2-tuple of (x, y)): peg1 (square) and peg2 (round) positions. None keeps the
+            arena's (0.15, +-0.1).
+
+        peg_height (None or float): height of the peg tops above the table. None keeps the arena's 0.13 m.
+
+        nut_x_range, nut_y_range (2-tuple): spawn ranges of the nuts' centres, relative to the table centre.
+
+        lift_height (float): the nut counts as lifted (reward stage) above the table body + this height.
+
+        nut_rotation (float): yaw of the spawned nuts (rad). 0 = handle along +x (original), pi = handle towards the robot.
+
         has_renderer (bool): If true, render the simulation state in
             a viewer instead of headless mode.
 
@@ -186,9 +197,21 @@ class NutAssembly(SingleArmEnv):
         renderer_config=None,
         object_type='test',
         use_latch=False,
+        peg_positions=None,
+        peg_height=None,
+        nut_x_range=(-0.115, -0.11),
+        nut_y_range=(-0.11, 0.11),
+        lift_height=0.1,
+        nut_rotation=0.0,
     ):
         # task settings
         self.nut_type = 'RoundNut'
+        self.peg_positions = peg_positions
+        self.peg_height = peg_height
+        self.nut_x_range = list(nut_x_range)
+        self.nut_y_range = list(nut_y_range)
+        self.lift_height = lift_height
+        self.nut_rotation = nut_rotation
         self.single_object_mode = single_object_mode
         self.nut_to_id = {"square": 0, "round": 1}
         self.nut_id_to_sensors = {}  # Maps nut id to sensor names for that nut
@@ -353,7 +376,7 @@ class NutAssembly(SingleArmEnv):
         r_lift = 0.0
         table_pos = np.array(self.sim.data.body_xpos[self.table_body_id])
         if active_nuts and r_grasp>0:
-            z_target = table_pos[2] + 0.1
+            z_target = table_pos[2] + self.lift_height
             object_z_locs = self.sim.data.body_xpos[[self.obj_body_id[active_nut.name] for active_nut in active_nuts]][
                 :, 2
             ]
@@ -410,6 +433,10 @@ class NutAssembly(SingleArmEnv):
 
         # Adjust base pose accordingly
         xpos = self.robots[0].robot_model.base_xpos_offset["table"](self.table_full_size[0])
+        # Robots standing on the table top (e.g. OpenManipulatorP) give their base height for a 0.8 m table;
+        # this arena's table top is at table_offset[2], so lift them onto it
+        if getattr(self.robots[0].robot_model, "table_mounted", False):
+            xpos = np.array(xpos) + np.array([0, 0, self.table_offset[2] - 0.8])
         self.robots[0].robot_model.set_base_xpos(xpos)
 
         # load model for table top workspace
@@ -422,6 +449,15 @@ class NutAssembly(SingleArmEnv):
         # Arena always gets set to zero origin
         mujoco_arena.set_origin([0, 0, 0])
 
+        # Optional peg layout (pegs are 0.2 m tall bodies embedded in the table; only their tops matter)
+        for i, peg_body in enumerate((mujoco_arena.peg1_body, mujoco_arena.peg2_body)):
+            pos = np.array([float(v) for v in peg_body.get("pos").split()])
+            if self.peg_positions is not None:
+                pos[:2] = self.peg_positions[i]
+            if self.peg_height is not None:
+                pos[2] = self.table_offset[2] + self.peg_height - 0.1
+            peg_body.set("pos", " ".join(str(v) for v in pos))
+
         # define nuts
         self.nuts = []
         nut_names = ("SquareNut", "RoundNut")
@@ -430,14 +466,14 @@ class NutAssembly(SingleArmEnv):
         if self.placement_initializer is None:
             self.placement_initializer = SequentialCompositeSampler(name="ObjectSampler")
             # for nut_name, default_y_range in zip(nut_names, ([0.11, 0.225], [-0.225, -0.11])):
-            for nut_name, default_y_range in zip(nut_names, ([-0.11, 0.11], [-0.11, 0.11])):
+            for nut_name, default_y_range in zip(nut_names, (self.nut_y_range, self.nut_y_range)):
                 self.placement_initializer.append_sampler(
                     sampler=UniformRandomSampler(
                         name=f"{nut_name}Sampler",
-                        x_range=[-0.115, -0.11],
+                        x_range=self.nut_x_range,
                         # x_range=[-0.115, -0.11],
                         y_range=default_y_range,
-                        rotation=0*np.pi,
+                        rotation=self.nut_rotation,
                         rotation_axis="z",
                         ensure_object_boundary_in_range=False,
                         ensure_valid_placement=False,

@@ -12,7 +12,7 @@ import time
 import os, sys
 import random
 from models import RNetwork
-from common import get_save_name, get_controller_config, get_workspace, orientation_hold_action
+from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action
 
 
 class Method(object):
@@ -142,7 +142,7 @@ class evaluate:
         return obs
 
     def get_state(self, obs):
-        if self.env == 'Door':
+        if self.state_dim == 7:  # position + orientation waypoints (Door configs)
             robot_pos = obs['robot0_eef_pos']
             robot_ang = R.from_quat(obs['robot0_eef_quat']).as_euler('xyz', degrees=False)
             state = np.concatenate((robot_pos, robot_ang), axis=-1)
@@ -183,9 +183,7 @@ class evaluate:
             has_offscreen_renderer=False,
             use_camera_obs=False,
             initialization_noise=None,
-            single_object_mode=2,
-            object_type=self.object,
-            use_latch=self.use_latch,
+            **get_env_kwargs(self.env_cfg, self.object, self.use_latch),
         )
 
         wp_id = self.num_wp

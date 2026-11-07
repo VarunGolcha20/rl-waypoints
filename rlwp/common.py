@@ -41,6 +41,17 @@ def get_controller_config(env_cfg):
     return load_controller_config(custom_fpath=path)
 
 
+def get_env_kwargs(env_cfg, object, use_latch):
+    """Extra suite.make arguments: rlwp's original ones, overridden / extended by the task YAML's env.env_kwargs
+    (e.g. an adapted task layout for a smaller robot). Without env_kwargs this is exactly the original call."""
+    def plain(v):  # hydra ListConfig -> list, recursively
+        return [plain(x) for x in v] if isinstance(v, (list, tuple)) or type(v).__name__ == 'ListConfig' else v
+
+    kwargs = dict(single_object_mode=2, object_type=object, use_latch=use_latch)
+    kwargs.update({k: plain(v) for k, v in (env_cfg.get('env_kwargs') or {}).items()})
+    return kwargs
+
+
 def get_workspace(env_cfg, state):
     """Waypoint position bounds relative to the start state, from the task YAML's absolute env.workspace
     (low / high, world frame). None when no workspace is configured (original behaviour)."""

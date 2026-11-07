@@ -1,0 +1,41 @@
+# Door (without latch) adapted to the OpenMANIPULATOR-P on its 9 mm base plate.
+# Run with task=Door_omp. Same schedule as Door.yaml (paper values), but position-only waypoints (state_dim 4) with
+# the gripper held pointing down: OM-P can't re-orient its gripper much (J5 +-90 deg).
+# The original door (0.6 m tall, handle 0.27 m above the base) is out of reach, so env_kwargs scales it to 0.75,
+# lowers its table and lines its handle up with the start pose; see README_OMP.md / IMPLEMENTATION_LOG.md.
+name: Door
+
+env:
+  robot: 'OpenManipulatorP'
+  controller: 'default_open_manipulator_p'
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 10
+  orientation_hold: True
+  env_kwargs:
+    door_scale: 0.75                     # door 0.33 x 0.44 m
+    door_handle_protrusion: 1.5          # handle bar ~10 cm off the panel (was 6 cm at this scale): the gripper housing
+                                         #   is 13 cm wide and must clear the panel while the fingers hold the bar
+    door_table_offset: [-0.06, -0.1175, 0.654]  # lower table: handle bar at ~0.86 m (grip height for OM-P)
+    door_table_full_size: [0.40, 0.08, 0.05]    # narrow, so it doesn't overlap the robot's stand
+    door_x_range: [0.06, 0.08]           # door placement relative to the table; the bar lies on the start pose's line
+    door_y_range: [-0.005, 0.005]        #   (y = 0) with its free end towards the robot, the hinge 11 cm from the base
+    door_rotation: [-1.6708, -1.5708]    # yaw -pi/2 - 0.1 .. -pi/2 (original: -pi/2 - 0.25 .. -pi/2)
+    robot_stand_half_size: 0.05
+  workspace:                             # from omp_tools/check_omp_workspace.py (9 mm base plate)
+    low:  [-0.20, -0.20, 0.825]
+    high: [ 0.05,  0.20, 0.905]
+
+
+task:
+  action_space: 0.5
+  batch_size: 30
+  epoch_wp: 300
+
+  exploration_epoch: 75
+  ensemble_sampling_epoch: 150
+  averaging_noise_epoch: 250
+  rand_reset_epoch: 250
+
+  num_eval: 100

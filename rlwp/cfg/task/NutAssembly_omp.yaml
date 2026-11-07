@@ -1,0 +1,39 @@
+# NutAssembly (round nut onto the round peg) adapted to the OpenMANIPULATOR-P on its 9 mm base plate.
+# Run with task=NutAssembly_omp. Same schedule as NutAssembly.yaml (paper values).
+# The original layout is out of reach for OM-P (0.13 m pegs 0.48 m from the base, nut spawning under the start
+# gripper), so env_kwargs moves the task closer and makes it lower; see README_OMP.md / IMPLEMENTATION_LOG.md T7c.
+name: NutAssembly
+
+env:
+  robot: 'OpenManipulatorP'
+  controller: 'default_open_manipulator_p'
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 15
+  orientation_hold: True
+  env_kwargs:
+    nut_rotation: 3.14159                            # handle points at the robot: the straight-line approach reaches
+                                                     # the handle before the ring (with +x the fingers land on the ring)
+    nut_x_range: [0.01, 0.03]                        # nut centre; handle grip point (7 cm towards the robot) ~0.27 m
+    nut_y_range: [-0.03, 0.03]                       #   from the base, clear of the start gripper
+    peg_positions: [[0.15, 0.25], [0.02, -0.18]]     # square peg out of the way (unused); round peg 0.15-0.21 m from
+                                                     #   the nut, so the straight carry path clears it
+    peg_height: 0.03                                 # peg tops 3 cm above the table (was 13 cm)
+    lift_height: 0.075                               # lift reward stage: nut centre > table + 5 cm (was 7.5 cm)
+  workspace:                             # from omp_tools/check_omp_workspace.py (9 mm base plate)
+    low:  [-0.20, -0.20, 0.845]
+    high: [ 0.00,  0.20, 0.950]
+
+
+task:
+  action_space: 0.5
+  batch_size: 30
+  epoch_wp: 350
+
+  exploration_epoch: 75
+  ensemble_sampling_epoch: 175
+  averaging_noise_epoch: 300
+  rand_reset_epoch: 300
+
+  num_eval: 100
