@@ -17,7 +17,7 @@ import numpy as np
 import robosuite as suite
 from robosuite.controllers import load_controller_config
 
-LIFT = 0.06  # lift height above the grasp point (top of the reach band with the 9 mm base plate)
+LIFT = 0.06  # lift height above the grasp point (within the reach band above the base plate)
 
 
 def main():

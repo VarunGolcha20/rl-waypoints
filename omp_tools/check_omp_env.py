@@ -17,7 +17,7 @@ import robosuite as suite
 from robosuite.controllers import load_controller_config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LIFT = 0.06  # scripted pick: lift height above the grasp point (top of the reach band with the 9 mm base plate)
+LIFT = 0.06  # scripted pick: lift height above the grasp point (within the reach band above the base plate)
 
 
 def make_env(env_name, controller="default"):

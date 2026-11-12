@@ -140,7 +140,7 @@ OM-P task configs: `cfg/task/{Lift,Stack,NutAssembly,PickPlace,Door}_omp.yaml`. 
 (so the curves compare directly with Panda), the `default_open_manipulator_p` controller (coupled OSC), orientation
 hold, position-only waypoints (`state_dim: 4`), and the workspace boxes from `check_omp_workspace.py`.
 
-**The tasks are adapted to the OM-P on its 9 mm base.** With the gripper pointing down, the arm keeps the grip point
+**The tasks are adapted to the OM-P on its 1.7 cm base plate.** With the gripper pointing down, the arm keeps the grip point
 within ~0.83–0.905 m (3–10 cm above the table) and ~0.15–0.40 m from its base. rlwp moves in a straight line between
 waypoints, and the OM-X fingers open sideways (along y). So objects are approached head-on (along x), and anything
 carried sideways must start far enough from obstacles to rise over them. The original robosuite layouts don't fit
@@ -150,7 +150,7 @@ original tasks, and Panda results are bit-identical):
 | Task | What changed (`env_kwargs`) | Why |
 |---|---|---|
 | Lift_omp | nothing | fits as is |
-| Stack_omp | cubeA spawns straight in front of the start pose (x −0.03…0.01, y −0.05…−0.01), cubeB 12–16 cm to the side (y 0.12…0.16) | sideways approach would push cubeA away with the fingers. cubeA must rise over cubeB before reaching it |
+| Stack_omp | cubeA spawns straight in front of the start pose (x −0.03…0.01, y −0.05…−0.01), cubeB 12–16 cm to the side (y 0.12…0.16). `relative_stack_check`: stacked = cubeA's bottom on cubeB's top, using the actual cube heights | sideways approach would push cubeA away with the fingers. cubeA must rise over cubeB before reaching it. The original check (cubeA centre > table + 5 cm) only fits the stock 40/50 mm cubes and misses real stacks on lower cubeBs |
 | NutAssembly_omp | nut handle points at the robot (`nut_rotation` π), nut spawns at x 0.01…0.03, y ±0.03. Round peg at (0.02, −0.18), **3 cm tall** (was 13 cm). Square peg moved aside. Lift stage 5 cm | fingers would land on the ring before the handle. The nut can only be carried ~6 cm high |
 | PickPlace_omp (can) | bins scaled 0.4× (0.16 × 0.20 m) with **1.5 cm lips** (were 8 cm), object bin straight ahead, target bin to the side. Robot on a stand at bin height. Lift stage 3 cm | original bins 0.6 m away with walls the can couldn't clear |
 | Door_omp | door scaled 0.75×, handle stands off 1.5× further (bar ~10 cm off the panel), on a lower table (handle at 0.86 m) in line with the start pose. Robot on a stand. Position-only waypoints | original handle 27 cm above the base. The 13 cm-wide gripper housing must clear the panel |
@@ -161,7 +161,7 @@ runs a hand-designed waypoint pair through rlwp's exact action rule: **20/20 suc
 | Task | workspace low | workspace high |
 |---|---|---|
 | Lift_omp, Stack_omp, PickPlace_omp, Door_omp | [-0.20, -0.20, 0.825] | [0.05, 0.20, 0.905] |
-| NutAssembly_omp (table at 0.82) | [-0.20, -0.20, 0.845] | [0.00, 0.20, 0.950] |
+| NutAssembly_omp (table at 0.82) | [-0.20, -0.25, 0.845] | [0.00, 0.25, 0.950] |
 
 If you change the robot model, its base placement, the controller or a task layout, rerun
 `omp_tools/check_omp_workspace.py` (regions per task in its `TASK_REGIONS`) and `omp_tools/check_omp_tasks.py`.
@@ -175,13 +175,15 @@ PickPlace needs rlwp's top-level `object`: `train_omp.sh` adds `object=can` for 
   inertias, hardware joint ranges, Dynamixel-P torque limits). Class `OpenManipulatorP`.
 * **Gripper**: `robosuite/robosuite/models/assets/grippers/omx_gripper.xml` (from ROBOTIS' OM-X MuJoCo model,
   20–80 mm opening, box fingerpads), class `OMXGripper`, on a 10 mm adapter plate.
-* **Mount**: the robot stands on a **~9 mm base plate on the table top** (a TurtleBot3 Waffle Pi waffle plate,
-  `OMPRiserMount`; thickness to be confirmed by measurement), base at x = −0.32 m, z = 0.809 m. With the gripper
-  pointing down, OM-P's wrist (J5, ±90°) limits the grip point to ~0.10 m above the base, so the base height sets the
-  whole vertical working range. To change it, edit the three numbers in
-  `robosuite/robosuite/models/assets/mounts/omp_riser_mount.xml`, then rerun `check_omp_workspace.py` and update §5.
-  Mirror this on the real robot.
-* **Start pose**: gripper pointing down, 0.079 m above the table, 0.22 m in front of the base.
+* **Mount / base plate**: the robot stands on a **box-shaped base plate on the table top** (`OMPRiserMount`), by
+  default the TurtleBot3 Waffle Pi plate: 0.14 × 0.14 m, **1.7 cm thick**. Base at x = −0.32 m, z = 0.817 m.
+  **To change the box**, edit `BASE_PLATE_SIZE = (length x, width y, height z)` and, if needed,
+  `BASE_PLATE_OFFSET = (x, y)` (plate centre relative to the robot base) at the top of
+  `robosuite/robosuite/models/mounts/omp_riser_mount.py`. The XML file is only a template. With the gripper
+  pointing down, OM-P's wrist (J5, ±90°) limits the grip point to ~0.10 m above the base, so the plate height shifts
+  the whole vertical working range. After changing the height, rerun `check_omp_workspace.py` and
+  `check_omp_tasks.py`, and update the workspace blocks (§5). Mirror the plate on the real robot.
+* **Start pose**: gripper pointing down, 0.087 m above the table, 0.22 m in front of the base.
 * **Controller**: `controllers/config/default_open_manipulator_p.json` = robosuite OSC_POSE with
   `uncouple_pos_ori: false`. The default uncoupled OSC moves this 6-DoF arm at half speed along x.
 

@@ -1,4 +1,4 @@
-# Door (without latch) adapted to the OpenMANIPULATOR-P on its 9 mm base plate.
+# Door (without latch) adapted to the OpenMANIPULATOR-P on its 1.7 cm base plate.
 # Run with task=Door_omp. Same schedule as Door.yaml (paper values), but position-only waypoints (state_dim 4) with
 # the gripper held pointing down: OM-P can't re-orient its gripper much (J5 +-90 deg).
 # The original door (0.6 m tall, handle 0.27 m above the base) is out of reach, so env_kwargs scales it to 0.75,
@@ -23,7 +23,7 @@ env:
     door_y_range: [-0.005, 0.005]        #   (y = 0) with its free end towards the robot, the hinge 11 cm from the base
     door_rotation: [-1.6708, -1.5708]    # yaw -pi/2 - 0.1 .. -pi/2 (original: -pi/2 - 0.25 .. -pi/2)
     robot_stand_half_size: 0.05
-  workspace:                             # from omp_tools/check_omp_workspace.py (9 mm base plate)
+  workspace:                             # from omp_tools/check_omp_workspace.py (1.7 cm base plate)
     low:  [-0.20, -0.20, 0.825]
     high: [ 0.05,  0.20, 0.905]
 

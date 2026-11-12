@@ -69,6 +69,13 @@ class Stack(SingleArmEnv):
             be used to place objects on every reset, else a UniformRandomSampler
             is used by default.
 
+        cubeA_x_range, cubeA_y_range, cubeB_x_range, cubeB_y_range (2-tuple): cube spawn ranges relative to the table
+            centre. Defaults: the original layout.
+
+        relative_stack_check (bool): False (original): cubeA counts as lifted / stacked when its centre is > 5 cm
+            above the table (assumes the stock 40 mm cubeA on the 50 mm cubeB). True: when cubeA's bottom is at or above
+            cubeB's top (5 mm tolerance), using the actual cube heights.
+
         has_renderer (bool): If true, render the simulation state in
             a viewer instead of headless mode.
 
@@ -172,7 +179,12 @@ class Stack(SingleArmEnv):
         cubeA_y_range=(-0.08, 0.08),
         cubeB_x_range=(0.02, 0.08),
         cubeB_y_range=(-0.08, 0.08),
+        relative_stack_check=False,
     ):
+        # False (original): cubeA counts as lifted / stacked when its centre is > 5 cm above the table, which assumes
+        # the stock 40 mm cubeA on the 50 mm cubeB. True: when cubeA's bottom is at or above cubeB's top (5 mm
+        # tolerance), using the actual cube heights, so other cube sizes are judged correctly
+        self.relative_stack_check = relative_stack_check
         # cube spawn ranges (relative to the table centre); defaults are the original layout
         self.cube_ranges = [list(cubeA_x_range), list(cubeA_y_range), list(cubeB_x_range), list(cubeB_y_range)]
         # settings for table top
@@ -288,7 +300,12 @@ class Stack(SingleArmEnv):
         # lifting is successful when the cube is above the table top by a margin
         cubeA_height = cubeA_pos[2]
         table_height = self.table_offset[2]
-        cubeA_lifted = cubeA_height > table_height + 0.05
+        if self.relative_stack_check:
+            cubeA_bottom = cubeA_height - self.cubeA.size[2]
+            cubeB_top = cubeB_pos[2] + self.cubeB.size[2]
+            cubeA_lifted = cubeA_bottom > cubeB_top - 0.005
+        else:
+            cubeA_lifted = cubeA_height > table_height + 0.05
         r_lift = 1.0 if cubeA_lifted else 0.0
 
         # Aligning is successful when cubeA is right above cubeB

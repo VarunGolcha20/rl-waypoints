@@ -10,7 +10,7 @@ env:
   wp_steps: 50
   gripper_steps: 10
   orientation_hold: True                     # keep the gripper pointing down between waypoints
-  workspace:                             # from omp_tools/check_omp_workspace.py (9 mm base plate)
+  workspace:                             # from omp_tools/check_omp_workspace.py (1.7 cm base plate)
     low:  [-0.20, -0.20, 0.825]
     high: [ 0.05,  0.20, 0.905]
 

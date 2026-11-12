@@ -27,6 +27,7 @@ from common import get_controller_config, get_env_kwargs, orientation_hold_actio
 import robosuite as suite  # noqa: E402
 
 OBJECT = {"PickPlace": "can"}  # rlwp's top-level `object` for PickPlace
+CEILING = {"z": 0.905}  # highest waypoint z: set per task from its workspace box (depends on the base plate height)
 
 
 # --- hand-designed waypoints: (target xyz, gripper command) x 2, from settled object positions -------------------
@@ -37,7 +38,7 @@ def plan_lift(env, obs):
 
 def plan_stack(env, obs):
     a, b = obs["cubeA_pos"], obs["cubeB_pos"]
-    over_b = np.r_[b[:2], 0.905]  # as high as the workspace allows: the straight carry path must clear cubeB
+    over_b = np.r_[b[:2], CEILING["z"]]  # as high as the workspace allows: the straight carry path must clear cubeB
     return [(a + [0, 0, 0.005], 1.0), (over_b, -1.0)]
 
 
@@ -57,7 +58,7 @@ def plan_pickplace(env, obs):
     can = obs["can_pos"]
     target = env.target_bin_placements[env.object_to_id["can"]]
     # grasp low on the can (its bottom then rises sooner on the straight carry), release high over the compartment
-    return [(can + [0, 0, -0.015], 1.0), (np.r_[target[:2], 0.905], -1.0)]
+    return [(can + [0, 0, -0.015], 1.0), (np.r_[target[:2], CEILING["z"]], -1.0)]
 
 
 def plan_door(env, obs):
@@ -86,6 +87,8 @@ def run(task, episodes, seed):
                      **get_env_kwargs(env_cfg, OBJECT.get(env_name), env_cfg["use_latch"]))
     wp_steps, gripper_steps = env_cfg["wp_steps"], env_cfg["gripper_steps"]
     ws = env_cfg.get("workspace")
+    if ws is not None:
+        CEILING["z"] = ws["high"][2]
     np.random.seed(seed)
     ok, outside, tilt = 0, 0, 0.0
     for _ in range(episodes):

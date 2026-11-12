@@ -1,4 +1,4 @@
-# NutAssembly (round nut onto the round peg) adapted to the OpenMANIPULATOR-P on its 9 mm base plate.
+# NutAssembly (round nut onto the round peg) adapted to the OpenMANIPULATOR-P on its 1.7 cm base plate.
 # Run with task=NutAssembly_omp. Same schedule as NutAssembly.yaml (paper values).
 # The original layout is out of reach for OM-P (0.13 m pegs 0.48 m from the base, nut spawning under the start
 # gripper), so env_kwargs moves the task closer and makes it lower; see README_OMP.md / IMPLEMENTATION_LOG.md T7c.
@@ -21,9 +21,9 @@ env:
                                                      #   the nut, so the straight carry path clears it
     peg_height: 0.03                                 # peg tops 3 cm above the table (was 13 cm)
     lift_height: 0.075                               # lift reward stage: nut centre > table + 5 cm (was 7.5 cm)
-  workspace:                             # from omp_tools/check_omp_workspace.py (9 mm base plate)
-    low:  [-0.20, -0.20, 0.845]
-    high: [ 0.00,  0.20, 0.950]
+  workspace:                             # from omp_tools/check_omp_workspace.py (1.7 cm base plate)
+    low:  [-0.20, -0.25, 0.845]
+    high: [ 0.00,  0.25, 0.950]
 
 
 task:
