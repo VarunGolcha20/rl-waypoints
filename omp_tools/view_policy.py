@@ -7,6 +7,7 @@ Read-only: loads rlwp/models/..., never writes.
     PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/view_policy.py --task Lift_omp --run omp_lift_30mm_s0
 
 Prints one line per episode (grasp / lift / success). Close the window to quit.
+--force-open replaces the last waypoint's gripper command with "open", to see where a release would land.
 """
 import argparse
 import os
@@ -38,6 +39,8 @@ def main():
     ap.add_argument("--task", default="Stack_omp", help="rlwp task config (cfg/task/<task>.yaml)")
     ap.add_argument("--run", required=True, help="run name, e.g. omp_stack_30mm_s2")
     ap.add_argument("--object", default="can", help="PickPlace object")
+    ap.add_argument("--force-open", action="store_true",
+                    help="override the last waypoint's gripper command with 'open' (what if it released there?)")
     args = ap.parse_args()
 
     task = yaml.safe_load(open(os.path.join("cfg", "task", args.task + ".yaml")))
@@ -63,6 +66,8 @@ def main():
         while viewer.is_running():
             episode += 1
             traj = agent.traj_opt(episode, get_objs(obs)).reshape(2, ec["state_dim"])
+            if args.force_open:
+                traj[-1, 3] = -1.0
             targets = traj[:, :3] + state(obs)
             goal = R.from_quat(obs["robot0_eef_quat"])
             time_s, grasped, success, reward = 0, False, False, 0.0

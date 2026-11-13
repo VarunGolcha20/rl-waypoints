@@ -12,12 +12,15 @@ env:
   orientation_hold: True
   env_kwargs:                                # adapted layout (original: cubeA x [-0.08, -0.04], cubeB x [0.02, 0.08], both y +-0.08)
     cubeA_x_range: [-0.03, 0.01]             # cubeA straight in front of the start pose (like Lift): the gripper's
-    cubeA_y_range: [-0.05, -0.01]            #   fingers open along y, so a sideways approach would push the cube away
+    cubeA_y_range: [-0.03, 0.00]              #   fingers open along y, so a sideways approach would push the cube away
     cubeB_x_range: [-0.04, 0.00]             # cubeB >= 13 cm to the side: rlwp carries cubeA in a straight line to
-    cubeB_y_range: [0.12, 0.16]              #   the drop point, so cubeA and the leading finger must rise 5 cm first
-    cubeA_full_size: [0.04, 0.04, 0.04]      # the paper's cubes: 40 mm onto 50 mm. A 50 mm cubeB gives ~2.8x the landing
-    cubeB_full_size: [0.05, 0.05, 0.05]      #   area of 30 mm, so exploratory releases land (and get rewarded) far more
-                                             #   often; with 30 mm cubes Stack reached 0-48 %. Set to your real cubes
+    cubeB_y_range: [0.13, 0.17]              #   the drop point, so cubeA and the leading finger must rise 5 cm first
+    cubeA_full_size: [0.055, 0.055, 0.055]   # carried cube 55 mm (user's choice)
+    cubeB_full_size: [0.065, 0.065, 0.048]   # landing cube 65 mm, set 17 mm deep in a recess: only the top 48 mm stand
+                                             #   above the table (a full 65 mm top is too close to the arm's carry limit:
+                                             #   scripted Stack 11/20). Same 65 x 65 mm landing area
+                                             # (55 mm cubeA leaves ~12 mm per open finger: spawn it nearly straight
+                                             #   ahead, else the leading finger bumps it; cubeB 1 cm further out)
     relative_stack_check: true               # stacked = cubeA's bottom on cubeB's top (actual heights), not a fixed
                                              #   5 cm above the table, which only fits the stock 40/50 mm cubes
   workspace:                             # from omp_tools/check_omp_workspace.py (1.7 cm base plate)

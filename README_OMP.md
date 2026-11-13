@@ -115,15 +115,23 @@ and evaluation reward (mean ± std) and success rate. If there are several seeds
 ### 4.4 Trained models and watching them
 
 Trained OM-P models live in `rlwp/models/OpenManipulatorP/<Env>/<run>/` (reward-model ensembles `model_<waypoint>_<i>`,
-`data.pkl` = training curve, `eval_data.pkl` = evaluation). Committed: **Lift with a 30 mm cube** (1.7 cm base plate),
-`omp_lift_30mm_s0` / `_s1` / `_s2`, evaluation success **100 % / 77 % / 85 %**. Use **`omp_lift_30mm_s0`**. To
-re-evaluate it, set `cube_full_size: [0.03, 0.03, 0.03]` in `Lift_omp.yaml` (the size it was trained with; the current
-default) and run `python main.py test=True task=Lift_omp run_name=omp_lift_30mm_s0` from `rlwp/`.
+`data.pkl` = training curve, `eval_data.pkl` = evaluation). Committed Lift models (1.7 cm base plate):
+
+| Run (folder) | Cube | Evaluation success (100 episodes) |
+|---|---|---|
+| **`omp_lift_55mm_s2_best`** | 55 mm | **99 %** (reward 69.8), **use this one** |
+| `omp_lift_55mm_s1` / `_s0` | 55 mm | 99 % / 50 % |
+| `omp_lift_30mm_s0` / `_s1` / `_s2` | 30 mm | 100 % / 77 % / 85 % |
+
+A model must be run with the cube size it was trained with: `Lift_omp.yaml` is set to 55 mm. For the 30 mm models, set
+`cube_full_size: [0.03, 0.03, 0.03]`. Re-evaluate from `rlwp/` with
+`python main.py test=True task=Lift_omp run_name=omp_lift_55mm_s2_best`.
 
 Watch any saved model (waypoints chosen by the learned reward models, no exploration noise), one line per episode:
 ```bash
-PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/view_policy.py --task Lift_omp --run omp_lift_30mm_s0
+PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/view_policy.py --task Lift_omp --run omp_lift_55mm_s2_best
 ```
+`--force-open` overrides the last waypoint's gripper with "open" (where would a release land?).
 
 More waypoints / warm start: a task config can set its own `num_wp` (e.g. `cfg/task/Stack3_omp.yaml`: grasp → carry →
 lower and release). `train_omp.sh --start-wp K --init-from <run prefix>` trains only waypoints K.. and reuses each seed's
