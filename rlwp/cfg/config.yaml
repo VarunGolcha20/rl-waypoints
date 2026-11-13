@@ -7,6 +7,8 @@ render: False
 train: False
 test: False
 seed: null    # integer for reproducible runs (python / numpy / torch / object placement)
+start_wp: 1   # training starts at this waypoint; earlier waypoints' models must exist (or come from init_from)
+init_from: '' # run name whose waypoint 1 .. start_wp-1 models are copied in (same task / robot), e.g. omp_stack_30mm_s0
 
 defaults:
   - task: Lift

@@ -10,6 +10,9 @@ env:
   wp_steps: 50
   gripper_steps: 10
   orientation_hold: True                     # keep the gripper pointing down between waypoints
+  env_kwargs:
+    cube_full_size: [0.03, 0.03, 0.03]       # 30 mm cube: smallest with a safe grip margin (the gripper closes to
+                                             #   ~22 mm; original 40 mm). Set to your real cube's size
   workspace:                             # from omp_tools/check_omp_workspace.py (1.7 cm base plate)
     low:  [-0.20, -0.20, 0.825]
     high: [ 0.05,  0.20, 0.905]

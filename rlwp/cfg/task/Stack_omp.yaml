@@ -15,6 +15,9 @@ env:
     cubeA_y_range: [-0.05, -0.01]            #   fingers open along y, so a sideways approach would push the cube away
     cubeB_x_range: [-0.04, 0.00]             # cubeB >= 13 cm to the side: rlwp carries cubeA in a straight line to
     cubeB_y_range: [0.12, 0.16]              #   the drop point, so cubeA and the leading finger must rise 5 cm first
+    cubeA_full_size: [0.04, 0.04, 0.04]      # the paper's cubes: 40 mm onto 50 mm. A 50 mm cubeB gives ~2.8x the landing
+    cubeB_full_size: [0.05, 0.05, 0.05]      #   area of 30 mm, so exploratory releases land (and get rewarded) far more
+                                             #   often; with 30 mm cubes Stack reached 0-48 %. Set to your real cubes
     relative_stack_check: true               # stacked = cubeA's bottom on cubeB's top (actual heights), not a fixed
                                              #   5 cm above the table, which only fits the stock 40/50 mm cubes
   workspace:                             # from omp_tools/check_omp_workspace.py (1.7 cm base plate)

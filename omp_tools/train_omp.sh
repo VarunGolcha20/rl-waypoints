@@ -9,6 +9,9 @@
 #   --train-only  skip evaluation
 #   --eval-only   only evaluate existing <NAME>_s<seed> models
 #   --smoke       tiny schedule (a few episodes) to check the pipeline end to end in ~1 min per seed
+#   --start-wp K  start training at waypoint K, reusing waypoints 1..K-1 (needs --init-from or existing models)
+#   --init-from P copy waypoints 1..K-1 from run <P>_s<seed> (same task env / robot), e.g. -t Stack3_omp --start-wp 3
+#                 --init-from omp_stack_30mm
 #   --dry-run     print the commands without running them
 #   -- ...        extra hydra overrides passed to main.py, e.g. -- task.task.epoch_wp=100
 #
@@ -29,6 +32,8 @@ DO_TRAIN=1
 DO_EVAL=1
 SMOKE=0
 DRY=0
+START_WP=1
+INIT_FROM=""
 EXTRA=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -38,9 +43,11 @@ while [ $# -gt 0 ]; do
         --train-only) DO_EVAL=0; shift ;;
         --eval-only) DO_TRAIN=0; shift ;;
         --smoke) SMOKE=1; shift ;;
+        --start-wp) START_WP="$2"; shift 2 ;;
+        --init-from) INIT_FROM="$2"; shift 2 ;;
         --dry-run) DRY=1; shift ;;
         --) shift; EXTRA=("$@"); break ;;
-        -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
         *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
 done
@@ -73,7 +80,9 @@ echo "task=$TASK seeds=($SEEDS) name=$NAME logs=${LOGS#$RLWP/}"
 for s in $SEEDS; do
     if [ "$DO_TRAIN" = 1 ]; then
         start=$(date +%s)
-        run "$LOGS/seed${s}_train.log" train=True task="$TASK" seed="$s" run_name="${NAME}_s$s" "${EXTRA[@]}"
+        WARM=(start_wp="$START_WP")
+        [ -n "$INIT_FROM" ] && WARM+=(init_from="${INIT_FROM}_s$s")
+        run "$LOGS/seed${s}_train.log" train=True task="$TASK" seed="$s" run_name="${NAME}_s$s" "${WARM[@]}" "${EXTRA[@]}"
         [ "$DRY" = 1 ] || echo "  seed $s trained in $(( $(date +%s) - start )) s"
     fi
     if [ "$DO_EVAL" = 1 ]; then

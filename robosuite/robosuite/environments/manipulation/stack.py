@@ -72,6 +72,9 @@ class Stack(SingleArmEnv):
         cubeA_x_range, cubeA_y_range, cubeB_x_range, cubeB_y_range (2-tuple): cube spawn ranges relative to the table
             centre. Defaults: the original layout.
 
+        cubeA_full_size, cubeB_full_size (None or 3-tuple): full cube dimensions (x, y, z) in metres.
+            None = the original cubes (cubeA 40 mm, cubeB 50 mm).
+
         relative_stack_check (bool): False (original): cubeA counts as lifted / stacked when its centre is > 5 cm
             above the table (assumes the stock 40 mm cubeA on the 50 mm cubeB). True: when cubeA's bottom is at or above
             cubeB's top (5 mm tolerance), using the actual cube heights.
@@ -180,7 +183,10 @@ class Stack(SingleArmEnv):
         cubeB_x_range=(0.02, 0.08),
         cubeB_y_range=(-0.08, 0.08),
         relative_stack_check=False,
+        cubeA_full_size=None,
+        cubeB_full_size=None,
     ):
+        self.cube_full_sizes = (cubeA_full_size, cubeB_full_size)
         # False (original): cubeA counts as lifted / stacked when its centre is > 5 cm above the table, which assumes
         # the stock 40 mm cubeA on the 50 mm cubeB. True: when cubeA's bottom is at or above cubeB's top (5 mm
         # tolerance), using the actual cube heights, so other cube sizes are judged correctly
@@ -364,17 +370,18 @@ class Stack(SingleArmEnv):
             tex_attrib=tex_attrib,
             mat_attrib=mat_attrib,
         )
+        half_a, half_b = [None if v is None else [x / 2.0 for x in v] for v in self.cube_full_sizes]
         self.cubeA = BoxObject(
             name="cubeA",
-            size_min=[0.02, 0.02, 0.02],
-            size_max=[0.02, 0.02, 0.02],
+            size_min=half_a or [0.02, 0.02, 0.02],
+            size_max=half_a or [0.02, 0.02, 0.02],
             rgba=[1, 0, 0, 1],
             material=redwood,
         )
         self.cubeB = BoxObject(
             name="cubeB",
-            size_min=[0.025, 0.025, 0.025],
-            size_max=[0.025, 0.025, 0.025],
+            size_min=half_b or [0.025, 0.025, 0.025],
+            size_max=half_b or [0.025, 0.025, 0.025],
             rgba=[0, 1, 0, 1],
             material=greenwood,
         )

@@ -1,5 +1,5 @@
 """
-Is each OM-P task solvable with rlwp's 2-waypoint scheme? For every task this builds the env exactly as rlwp does
+Is each OM-P task solvable with rlwp's waypoint scheme (2 waypoints; Stack3: 3)? For every task this builds the env exactly as rlwp does
 (from rlwp/cfg/task/<Task>_omp.yaml: controller, env_kwargs, wp_steps, gripper_steps, orientation hold) and executes a
 hand-designed pair of waypoints with rlwp's own action rule (50-step segments, gripper open for the first 10 steps,
 gripper command only in the last gripper_steps of each segment). Reports success rate, whether the scripted waypoints
@@ -42,6 +42,14 @@ def plan_stack(env, obs):
     return [(a + [0, 0, 0.005], 1.0), (over_b, -1.0)]
 
 
+def plan_stack3(env, obs):
+    # 3 waypoints: grasp cubeA (close), carry high over cubeB (stay closed), lower onto cubeB (open): a short drop
+    a, b = obs["cubeA_pos"], obs["cubeB_pos"]
+    over_b = np.r_[b[:2], CEILING["z"]]
+    on_b = np.r_[b[:2], b[2] + env.cubeB.size[2] + env.cubeA.size[2] + 0.01]  # cubeA bottom 5 mm above cubeB's top
+    return [(a + [0, 0, 0.005], 1.0), (over_b, 1.0), (on_b, -1.0)]
+
+
 def plan_nut(env, obs):
     nut = obs["RoundNut_pos"]
     table = env.table_offset[2]
@@ -70,7 +78,7 @@ def plan_door(env, obs):
     return [(h, 1.0), (np.r_[hinge + rot @ (h[:2] - hinge), h[2]], 1.0)]
 
 
-PLANS = {"Lift": plan_lift, "Stack": plan_stack, "NutAssembly": plan_nut, "PickPlace": plan_pickplace,
+PLANS = {"Lift": plan_lift, "Stack": plan_stack, "Stack3": plan_stack3, "NutAssembly": plan_nut, "PickPlace": plan_pickplace,
          "Door": plan_door}
 
 
@@ -102,7 +110,7 @@ def run(task, episodes, seed):
             wps = clipped
         ori_goal = R.from_quat(obs["robot0_eef_quat"])
         success, time_s = False, 0
-        for t in range(2 * wp_steps):  # rlwp's get_action
+        for t in range(len(wps) * wp_steps):  # rlwp's get_action
             i = t // wp_steps
             err = wps[i][0] - obs["robot0_eef_pos"]
             if t < 10:
@@ -131,7 +139,7 @@ def main():
     args = ap.parse_args()
     for task in args.tasks:
         ok, outside, tilt = run(task, args.episodes, args.seed)
-        print("%-12s scripted 2-waypoint success %2d/%d | episodes with a waypoint clipped > 5 mm by the workspace box: %d | "
+        print("%-12s scripted waypoint success %2d/%d | episodes with a waypoint clipped > 5 mm by the workspace box: %d | "
               "max tool tilt %.1f deg" % (task, ok, args.episodes, outside, tilt), flush=True)
 
 

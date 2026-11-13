@@ -112,7 +112,24 @@ python omp_tools/summarize_runs.py omp_lift        # table across seeds at any t
 The summary reports per seed: training episodes, reward and success rate over the last 50 training episodes,
 and evaluation reward (mean ± std) and success rate. If there are several seeds, it adds the mean across seeds.
 
-### 4.4 Running `main.py` directly
+### 4.4 Trained models and watching them
+
+Trained OM-P models live in `rlwp/models/OpenManipulatorP/<Env>/<run>/` (reward-model ensembles `model_<waypoint>_<i>`,
+`data.pkl` = training curve, `eval_data.pkl` = evaluation). Committed: **Lift with a 30 mm cube** (1.7 cm base plate),
+`omp_lift_30mm_s0` / `_s1` / `_s2`, evaluation success **100 % / 77 % / 85 %**. Use **`omp_lift_30mm_s0`**. To
+re-evaluate it, set `cube_full_size: [0.03, 0.03, 0.03]` in `Lift_omp.yaml` (the size it was trained with; the current
+default) and run `python main.py test=True task=Lift_omp run_name=omp_lift_30mm_s0` from `rlwp/`.
+
+Watch any saved model (waypoints chosen by the learned reward models, no exploration noise), one line per episode:
+```bash
+PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/view_policy.py --task Lift_omp --run omp_lift_30mm_s0
+```
+
+More waypoints / warm start: a task config can set its own `num_wp` (e.g. `cfg/task/Stack3_omp.yaml`: grasp → carry →
+lower and release). `train_omp.sh --start-wp K --init-from <run prefix>` trains only waypoints K.. and reuses each seed's
+frozen waypoints 1..K-1 from `<run prefix>_s<seed>` (same task settings).
+
+### 4.5 Running `main.py` directly
 
 The launcher only wraps the original entry point. Run from `rlwp/`:
 ```bash
@@ -134,7 +151,7 @@ New keys. All are optional, and leaving them out gives the original behaviour:
 | `env.controller` | task YAML | robosuite controller config name (`robosuite/robosuite/controllers/config/<name>.json`). Unset = generic `OSC_POSE` |
 | `env.workspace.low/high` | task YAML | absolute world-frame bounds (m) for the waypoint positions. Used by exploration, the SLSQP constraint and the injected noise. Unset = ±`action_space` around the start pose |
 | `env.orientation_hold` | task YAML | for position-only tasks, actively keeps the gripper at its start orientation (pointing down) |
-| `env.env_kwargs` | task YAML | extra `suite.make` arguments, e.g. an adapted task layout (see below). Unset = the original call |
+| `env.env_kwargs` | task YAML | extra `suite.make` arguments, e.g. an adapted task layout or object sizes (see below). Unset = the original call |
 
 OM-P task configs: `cfg/task/{Lift,Stack,NutAssembly,PickPlace,Door}_omp.yaml`. They use the paper's schedules
 (so the curves compare directly with Panda), the `default_open_manipulator_p` controller (coupled OSC), orientation
@@ -149,8 +166,8 @@ original tasks, and Panda results are bit-identical):
 
 | Task | What changed (`env_kwargs`) | Why |
 |---|---|---|
-| Lift_omp | nothing | fits as is |
-| Stack_omp | cubeA spawns straight in front of the start pose (x −0.03…0.01, y −0.05…−0.01), cubeB 12–16 cm to the side (y 0.12…0.16). `relative_stack_check`: stacked = cubeA's bottom on cubeB's top, using the actual cube heights | sideways approach would push cubeA away with the fingers. cubeA must rise over cubeB before reaching it. The original check (cubeA centre > table + 5 cm) only fits the stock 40/50 mm cubes and misses real stacks on lower cubeBs |
+| Lift_omp | `cube_full_size` 30 mm (stock 40 mm) | smallest cube with a safe grip margin: the gripper closes to ~22 mm. Set it to your real cube |
+| Stack_omp | cubeA 40 mm onto cubeB 50 mm (the paper's sizes, set via `cubeA_full_size` / `cubeB_full_size`). cubeA spawns straight in front of the start pose (x −0.03…0.01, y −0.05…−0.01), cubeB 12–16 cm to the side (y 0.12…0.16). `relative_stack_check`: stacked = cubeA's bottom on cubeB's top, using the actual cube heights | sideways approach would push cubeA away with the fingers. cubeA must rise over cubeB before reaching it. The original check (cubeA centre > table + 5 cm) only fits the stock 40/50 mm cubes and misses real stacks on lower cubeBs |
 | NutAssembly_omp | nut handle points at the robot (`nut_rotation` π), nut spawns at x 0.01…0.03, y ±0.03. Round peg at (0.02, −0.18), **3 cm tall** (was 13 cm). Square peg moved aside. Lift stage 5 cm | fingers would land on the ring before the handle. The nut can only be carried ~6 cm high |
 | PickPlace_omp (can) | bins scaled 0.4× (0.16 × 0.20 m) with **1.5 cm lips** (were 8 cm), object bin straight ahead, target bin to the side. Robot on a stand at bin height. Lift stage 3 cm | original bins 0.6 m away with walls the can couldn't clear |
 | Door_omp | door scaled 0.75×, handle stands off 1.5× further (bar ~10 cm off the panel), on a lower table (handle at 0.86 m) in line with the start pose. Robot on a stand. Position-only waypoints | original handle 27 cm above the base. The 13 cm-wide gripper housing must clear the panel |
@@ -195,3 +212,16 @@ PickPlace needs rlwp's top-level `object`: `train_omp.sh` adds `object=can` for 
 * Viewer window problems on Wayland: prefix with `PYGLFW_LIBRARY_VARIANT=x11`.
 * Loading the shipped Panda models on a CPU-only machine needs `map_location`, which is now built in.
 * `run name 'test' is reserved`: choose another `-n`. The shipped Panda models are stored under `test`.
+
+## 8. Object sizes (Lift / Stack)
+
+Set the cubes to match your real objects in `rlwp/cfg/task/Lift_omp.yaml` (`cube_full_size`, now 30 mm) and
+`Stack_omp.yaml` / `Stack3_omp.yaml` (`cubeA_full_size`, `cubeB_full_size`, now 40 / 50 mm): full x, y, z in metres (x = approach direction, y = across the fingers, z = height).
+Cuboids are fine if they are always placed in the same orientation. From scripted tests (OM-P, 1.7 cm plate):
+25–60 mm across the fingers (the gripper closes to ~22 mm and opens to ~80 mm), length along the approach up to ≥ 10 cm,
+height ≥ 20 mm, Stack's bottom box ≤ ~55 mm tall. After changing sizes, run `omp_tools/check_omp_tasks.py`, and retrain.
+
+For Stack, the size of the bottom cube matters most for *learning*: rlwp only learns to open the gripper over cubeB if
+exploratory releases land on it often enough. With 30 mm cubes, training reached 35 % / 0 % / 48 % (2 waypoints) and
+38 % / 0 % / 33 % (3 waypoints, which learned to hover over cubeB). A 50 mm cubeB gives ~2.8× the landing area.
+

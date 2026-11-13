@@ -69,6 +69,8 @@ class Lift(SingleArmEnv):
             be used to place objects on every reset, else a UniformRandomSampler
             is used by default.
 
+        cube_full_size (None or 3-tuple): full cube dimensions (x, y, z) in metres. None = the original 40 mm cube.
+
         has_renderer (bool): If true, render the simulation state in
             a viewer instead of headless mode.
 
@@ -167,7 +169,9 @@ class Lift(SingleArmEnv):
         single_object_mode=None,
         object_type='test',
         use_latch=False,
+        cube_full_size=None,
     ):
+        self.cube_full_size = cube_full_size
         # settings for table top
         self.table_full_size = table_full_size
         self.table_friction = table_friction
@@ -297,10 +301,11 @@ class Lift(SingleArmEnv):
             tex_attrib=tex_attrib,
             mat_attrib=mat_attrib,
         )
+        cube_half = None if self.cube_full_size is None else [v / 2.0 for v in self.cube_full_size]
         self.cube = BoxObject(
             name="cube",
-            size_min=[0.020, 0.020, 0.020],  # [0.015, 0.015, 0.015],
-            size_max=[0.02, 0.02, 0.02],  # [0.018, 0.018, 0.018])
+            size_min=cube_half or [0.020, 0.020, 0.020],  # [0.015, 0.015, 0.015],
+            size_max=cube_half or [0.02, 0.02, 0.02],  # [0.018, 0.018, 0.018])
             rgba=[1, 0, 0, 1],
             material=redwood,
         )

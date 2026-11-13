@@ -9,6 +9,7 @@ from tqdm import tqdm
 from scipy.spatial.transform import Rotation as R
 import time
 import os, sys
+import shutil
 
 from memory import MyMemory
 from method import Method
@@ -19,7 +20,10 @@ class train:
     def __init__(self, config):
         self.config = config
         self.env = config['task']['name']
-        self.num_wp = config['num_wp']
+        self.num_wp = config['task'].get('num_wp', config['num_wp'])  # a task config may set its own number of waypoints
+        # warm start: begin at waypoint start_wp, reusing the frozen models of waypoints 1 .. start_wp-1 from run init_from
+        self.start_wp = config.get('start_wp', 1)
+        self.init_from = config.get('init_from') or ''
         self.render = config['render']
         self.n_inits = config['n_inits']
         self.run_name = config['run_name']
@@ -109,7 +113,15 @@ class train:
             **get_env_kwargs(self.env_cfg, self.object, self.use_latch),
         )
 
-        wp_id = 1
+        if self.init_from:
+            src = 'models/' + get_save_name(self.env, self.robot, self.init_from, self.object, self.use_latch)
+            os.makedirs('models/' + save_name, exist_ok=True)
+            for w in range(1, self.start_wp):
+                for idx in range(10):
+                    shutil.copy(src + '/model_%d_%d' % (w, idx), 'models/' + save_name + '/model_%d_%d' % (w, idx))
+            tqdm.write("Copied the models of waypoints 1..{} from {}".format(self.start_wp - 1, src))
+
+        wp_id = self.start_wp
 
         obs, objs = self.reset_env(env, get_objs=True)
         workspace = get_workspace(self.env_cfg, self.get_state(obs))
@@ -125,7 +137,7 @@ class train:
         EPOCHS = self.epoch_wp * self.num_wp
 
         total_steps = 0
-        for i_episode in tqdm(range(1, EPOCHS)):
+        for i_episode in tqdm(range(1 + (self.start_wp - 1) * self.epoch_wp, EPOCHS)):
             if i_episode % self.epoch_wp == 0:
                 agent.save_model(save_name)
 

@@ -104,7 +104,7 @@ class evaluate:
     def __init__(self, config):
         self.config = config
         self.env = config['task']['name']
-        self.num_wp = config['num_wp']
+        self.num_wp = config['task'].get('num_wp', config['num_wp'])  # a task config may set its own number of waypoints
         self.render = config['render']
         self.n_inits = config['n_inits']
         self.run_name = config['run_name']
