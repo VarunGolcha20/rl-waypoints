@@ -75,6 +75,9 @@ class Stack(SingleArmEnv):
         cubeA_full_size, cubeB_full_size (None or 3-tuple): full cube dimensions (x, y, z) in metres.
             None = the original cubes (cubeA 40 mm, cubeB 50 mm).
 
+        align_weight, align_sharpness (float): reward for holding cubeA (lifted) over cubeB:
+            align_weight * (1 - tanh(align_sharpness * horizontal distance)). Defaults: the original 0.5 and 10.
+
         relative_stack_check (bool): False (original): cubeA counts as lifted / stacked when its centre is > 5 cm
             above the table (assumes the stock 40 mm cubeA on the 50 mm cubeB). True: when cubeA's bottom is at or above
             cubeB's top (5 mm tolerance), using the actual cube heights.
@@ -185,7 +188,12 @@ class Stack(SingleArmEnv):
         relative_stack_check=False,
         cubeA_full_size=None,
         cubeB_full_size=None,
+        align_weight=0.5,
+        align_sharpness=10.0,
     ):
+        # alignment reward while cubeA is lifted: align_weight * (1 - tanh(align_sharpness * horizontal distance to cubeB))
+        self.align_weight = align_weight
+        self.align_sharpness = align_sharpness
         self.cube_full_sizes = (cubeA_full_size, cubeB_full_size)
         # False (original): cubeA counts as lifted / stacked when its centre is > 5 cm above the table, which assumes
         # the stock 40 mm cubeA on the 50 mm cubeB. True: when cubeA's bottom is at or above cubeB's top (5 mm
@@ -317,7 +325,7 @@ class Stack(SingleArmEnv):
         # Aligning is successful when cubeA is right above cubeB
         if cubeA_lifted:
             horiz_dist = np.linalg.norm(np.array(cubeA_pos[:2]) - np.array(cubeB_pos[:2]))
-            r_lift += 0.5 * (1 - np.tanh(10.0*horiz_dist)) * 1
+            r_lift += self.align_weight * (1 - np.tanh(self.align_sharpness * horiz_dist))
 
         # stacking is successful when the block is lifted and the gripper is not holding the object
         r_stack = 0

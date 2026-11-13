@@ -123,6 +123,13 @@ Trained OM-P models live in `rlwp/models/OpenManipulatorP/<Env>/<run>/` (reward-
 | `omp_lift_55mm_s1` / `_s0` | 55 mm | 99 % / 50 % |
 | `omp_lift_30mm_s0` / `_s1` / `_s2` | 30 mm | 100 % / 77 % / 85 % |
 
+Committed Stack models (55 mm cube onto a 65 mm landing cube set 17 mm deep, stronger alignment reward):
+
+| Run (folder) | Evaluation success (100 episodes) |
+|---|---|
+| **`omp_stack_55_65r_align_s1_best`** | **99 %** (reward 124.3), **use this one** |
+| `omp_stack_55_65r_align_s0` / `_s2` | 90 % / 0 % |
+
 A model must be run with the cube size it was trained with: `Lift_omp.yaml` is set to 55 mm. For the 30 mm models, set
 `cube_full_size: [0.03, 0.03, 0.03]`. Re-evaluate from `rlwp/` with
 `python main.py test=True task=Lift_omp run_name=omp_lift_55mm_s2_best`.
@@ -175,7 +182,7 @@ original tasks, and Panda results are bit-identical):
 | Task | What changed (`env_kwargs`) | Why |
 |---|---|---|
 | Lift_omp | `cube_full_size` 30 mm (stock 40 mm) | smallest cube with a safe grip margin: the gripper closes to ~22 mm. Set it to your real cube |
-| Stack_omp | cubeA 40 mm onto cubeB 50 mm (the paper's sizes, set via `cubeA_full_size` / `cubeB_full_size`). cubeA spawns straight in front of the start pose (x −0.03…0.01, y −0.05…−0.01), cubeB 12–16 cm to the side (y 0.12…0.16). `relative_stack_check`: stacked = cubeA's bottom on cubeB's top, using the actual cube heights | sideways approach would push cubeA away with the fingers. cubeA must rise over cubeB before reaching it. The original check (cubeA centre > table + 5 cm) only fits the stock 40/50 mm cubes and misses real stacks on lower cubeBs |
+| Stack_omp | cubeA 55 mm onto cubeB 65 mm set 17 mm deep (modelled 65 × 65 × 48 mm). **Stronger alignment reward** (`align_weight` 3, `align_sharpness` 20; original 0.5 / 10): with the original, waypoint 2 hovered beside cubeB and Stack stayed at 0 %; with it, 90–99 %. cubeA spawns straight in front of the start pose (x −0.03…0.01, y −0.05…−0.01), cubeB 12–16 cm to the side (y 0.12…0.16). `relative_stack_check`: stacked = cubeA's bottom on cubeB's top, using the actual cube heights | sideways approach would push cubeA away with the fingers. cubeA must rise over cubeB before reaching it. The original check (cubeA centre > table + 5 cm) only fits the stock 40/50 mm cubes and misses real stacks on lower cubeBs |
 | NutAssembly_omp | nut handle points at the robot (`nut_rotation` π), nut spawns at x 0.01…0.03, y ±0.03. Round peg at (0.02, −0.18), **3 cm tall** (was 13 cm). Square peg moved aside. Lift stage 5 cm | fingers would land on the ring before the handle. The nut can only be carried ~6 cm high |
 | PickPlace_omp (can) | bins scaled 0.4× (0.16 × 0.20 m) with **1.5 cm lips** (were 8 cm), object bin straight ahead, target bin to the side. Robot on a stand at bin height. Lift stage 3 cm | original bins 0.6 m away with walls the can couldn't clear |
 | Door_omp | door scaled 0.75×, handle stands off 1.5× further (bar ~10 cm off the panel), on a lower table (handle at 0.86 m) in line with the start pose. Robot on a stand. Position-only waypoints | original handle 27 cm above the base. The 13 cm-wide gripper housing must clear the panel |

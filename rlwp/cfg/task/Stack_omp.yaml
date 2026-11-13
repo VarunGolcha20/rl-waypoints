@@ -21,6 +21,9 @@ env:
                                              #   scripted Stack 11/20). Same 65 x 65 mm landing area
                                              # (55 mm cubeA leaves ~12 mm per open finger: spawn it nearly straight
                                              #   ahead, else the leading finger bumps it; cubeB 1 cm further out)
+    align_weight: 3.0                        # reward for holding cubeA over cubeB: 3 * (1 - tanh(20 * distance)), was
+    align_sharpness: 20.0                    #   0.5 * (1 - tanh(10 * d)): hovering aligned was worth only ~4 points more
+                                             #   per episode than hovering 9 cm off, so waypoint 2 never moved over cubeB
     relative_stack_check: true               # stacked = cubeA's bottom on cubeB's top (actual heights), not a fixed
                                              #   5 cm above the table, which only fits the stock 40/50 mm cubes
   workspace:                             # from omp_tools/check_omp_workspace.py (1.7 cm base plate)
