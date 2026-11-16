@@ -65,3 +65,29 @@ def orientation_hold_action(obs, ori_goal):
     """OSC delta-rotation action (in [-1, 1], 0.5 rad per unit) that turns the gripper back to ori_goal."""
     rotvec = (ori_goal * R.from_quat(obs['robot0_eef_quat']).inv()).as_rotvec()
     return np.clip(rotvec / 0.5, -1., 1.)
+
+
+def bounded_solution(res, xi0, lb, ub, cost_fn, tol=1e-6):
+    """Guard an SLSQP waypoint solution. SLSQP enforces the box only as a linear constraint and can run away (seen:
+    waypoints 1e7 m out of bounds when the learned reward keeps rising outside the box). A non-finite solution is
+    replaced by its (clipped) start point, an out-of-bounds one is clipped; both get their cost re-evaluated. A valid
+    solution (the normal case) is returned unchanged, so runs that never hit this behave exactly as before."""
+    x = res.x
+    if not np.all(np.isfinite(x)):
+        x = np.clip(xi0, lb, ub)
+        return x, cost_fn(x)
+    if np.any(x < lb - tol) or np.any(x > ub + tol):
+        x = np.clip(x, lb, ub)
+        return x, cost_fn(x)
+    return x, res.fun
+
+
+def lift_first_error(error, wp_idx, enabled, tol=0.01):
+    """env.lift_first: in every segment after the first, while the waypoint is more than `tol` above the gripper, track
+    only its height (zero the horizontal error), then move horizontally. rlwp's rule 10 * error saturates per axis, so
+    a long sideways move otherwise outruns the rise and a carried object skims what lies between (Stack: cubeA clipped
+    cubeB's top edge). Off (default) = the original straight-line rule."""
+    if enabled and wp_idx >= 1 and error[2] > tol:
+        error = np.array(error, dtype=float)
+        error[:2] = 0.0
+    return error

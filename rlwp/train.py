@@ -13,7 +13,7 @@ import shutil
 
 from memory import MyMemory
 from method import Method
-from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action
+from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action, lift_first_error
 
 
 class train:
@@ -32,6 +32,7 @@ class train:
         self.env_cfg = config['task']['env']
         self.robot = config['task']['env']['robot']
         self.orientation_hold = self.env_cfg.get('orientation_hold', False)
+        self.lift_first = self.env_cfg.get('lift_first', False)    # rise before moving sideways (segments 2+)
         self.state_dim = config['task']['env']['state_dim']
         self.gripper_steps = config['task']['env']['gripper_steps']
         self.wp_steps = config['task']['env']['wp_steps']
@@ -73,7 +74,7 @@ class train:
         return state
 
     def get_action(self, env, wp_idx, state, traj_mat, gripper_mat, time_s, timestep, obs=None):
-        error = traj_mat[wp_idx, :] - state
+        error = lift_first_error(traj_mat[wp_idx, :] - state, wp_idx, self.lift_first)
         if timestep < 10:
             full_action = np.array(list(10.*error) + [0.]*(6-len(state)) +[-1.])
         elif time_s >= self.wp_steps - self.gripper_steps:

@@ -22,7 +22,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from view_policy import OBJECTS, lifted_for_real, stacked_for_real  # noqa: E402  (also puts rlwp/ on sys.path, cwd = rlwp/)
-from common import get_controller_config, get_env_kwargs, get_save_name, get_workspace  # noqa: E402
+from common import get_controller_config, get_env_kwargs, get_save_name, get_workspace, lift_first_error  # noqa: E402
 from eval import Method  # noqa: E402
 
 import robosuite as suite  # noqa: E402
@@ -53,7 +53,7 @@ def check(task_name, run, episodes, seed):
         time_s, success, real, first = 0, False, False, None
         for t in range(num_wp * wp_steps):  # rlwp's get_action (position-only configs)
             i = t // wp_steps
-            err = targets[i] - obs["robot0_eef_pos"]
+            err = lift_first_error(targets[i] - obs["robot0_eef_pos"], i, ec.get("lift_first", False))
             if t < 10:
                 a = np.r_[10 * err, 0, 0, 0, -1.0]
             elif time_s >= wp_steps - gripper_steps:

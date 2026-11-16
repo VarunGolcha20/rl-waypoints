@@ -11,10 +11,20 @@ env:
   gripper_steps: 10
   orientation_hold: False                    # not needed: the controller keeps the gripper pointing down (X1)
   env_kwargs:
-    cube_full_size: [0.055, 0.055, 0.055]    # 55 mm cube (user's choice), spawns x, y +-3 cm = 14-20 cm from the base
+    cube_full_size: [0.055, 0.055, 0.055]    # 55 mm cube (user's choice)
+    cube_x_range: [0.01, 0.04]               # cube centre 18-21 cm from the base: its near face stays >= 2 cm ahead of the
+    cube_y_range: [-0.03, 0.03]              #   open fingers (pads end at x -0.038), so the start pose isn't over the cube
+                                             #   (was x +-0.03: the fingers hovered 1.1 cm above it, see OMX_PORT.md #7)
+    lift_check: 'grasped'                    # lifted = both pads hold the cube, centre >= lift_height above its resting
+    lift_height: 0.04                        #   height, tilt <= lift_max_tilt deg (original: centre > table + 4 cm, which a
+    lift_max_tilt: 15.0                      #   tilted, ungrasped 55 mm cube passes after 1.25 cm: OMX_PORT.md #1)
+    success_hold_steps: 10                   # success = held up for 10 consecutive steps (1 s); reward paid per step
+    push_penalty: 0.25                       # per-step penalty while the cube is > 2 cm from its spawn point and not grasped
+    push_threshold: 0.02
   workspace:                                 # from omp_tools/check_omp_workspace.py --robot OpenManipulatorX (base x -0.17,
     low:  [-0.07, -0.10, 0.825]              #   1.7 cm plate): every grid point tracked to < 1 cm; floor 0.825 = fingertips
-    high: [ 0.03,  0.10, 0.905]              #   4 mm above the table
+    high: [ 0.05,  0.10, 0.905]              #   4 mm above the table. x up to 0.05 (was 0.03) for the moved cube: tracking
+                                             #   error <= 9 mm there at every height (re-measured 2026-11-16)
 
 
 task:

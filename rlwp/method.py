@@ -5,6 +5,7 @@ from scipy.optimize import minimize, LinearConstraint
 import os
 import random
 from models import RNetwork
+from common import bounded_solution
 from tqdm import tqdm
 
 class Method(object):
@@ -87,9 +88,10 @@ class Method(object):
                     xi0 = self.clip_wp(xi0)
 
                     res = minimize(self.get_cost, xi0, method='SLSQP', constraints=self.lincon, options={'eps': 1e-6, 'maxiter': 1e6})
-                    if res.fun < min_cost:
-                        min_cost = res.fun
-                        self.best_wp = res.x
+                    x, fun = bounded_solution(res, xi0, self.lb, self.ub, self.get_cost)
+                    if fun < min_cost:
+                        min_cost = fun
+                        self.best_wp = x
                 if idx == self.wp_id and np.random.rand() < 0.5 and i_episode>self.ensemble_sampling_epoch and i_episode<self.averaging_noise_epoch:
                     tqdm.write("NOISE ADDED TO GRIPPER")
                     self.best_wp[-1] *= -1

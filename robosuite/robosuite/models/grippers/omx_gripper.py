@@ -80,3 +80,8 @@ class OMXNativeGripper(OMXGripper):
     """
 
     XML = "grippers/omx_native_gripper.xml"
+
+    # Start every episode with the internal command at "fully open" (the state init_qpos puts the fingers in). With the
+    # default zero command the fingers first moved toward half-open (82 -> ~68 mm) on the first step and then reopened.
+    # Only the OM-X's own gripper: the OM-P (OMXGripper) keeps the original behaviour of its trained models.
+    reset_action = (1.0, -1.0)

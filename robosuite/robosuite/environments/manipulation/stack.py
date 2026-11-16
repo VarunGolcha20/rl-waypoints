@@ -82,6 +82,21 @@ class Stack(SingleArmEnv):
             above the table (assumes the stock 40 mm cubeA on the 50 mm cubeB). True: when cubeA's bottom is at or above
             cubeB's top (5 mm tolerance), using the actual cube heights.
 
+        cubeB_fixed (bool): False (original): cubeB is a loose block. True: cubeB is a static body resting on the table
+            at its sampled position (like a landing block set into a recess), so it can't be pushed or tipped.
+
+        stack_check (str): "original": stacked = cubeA not grasped, lifted and touching cubeB, counted at any step.
+            "strict": additionally cubeA rests on cubeB's top (within stack_height_tol), is centred on it (within
+            stack_center_tol horizontally), lies flat (within stack_max_tilt degrees), is touched by no part of the
+            gripper and has settled (speed below stack_max_speed), and cubeB is upright (within cubeB_max_tilt) and
+            within cubeB_max_shift of where it spawned. Used for the stacking reward and the success check.
+
+        stack_center_tol, stack_height_tol, stack_max_tilt, stack_max_speed, cubeB_max_tilt, cubeB_max_shift: the
+            "strict" tolerances (m, m, deg, m/s, deg, m). Loosen them here if the strict rule turns out too hard.
+
+        success_hold_steps (int): for stack_check "strict", success needs the stacked condition for this many
+            consecutive control steps (1 = instantaneous). The stacking reward is paid from the first step.
+
         has_renderer (bool): If true, render the simulation state in
             a viewer instead of headless mode.
 
@@ -190,7 +205,24 @@ class Stack(SingleArmEnv):
         cubeB_full_size=None,
         align_weight=0.5,
         align_sharpness=10.0,
+        cubeB_fixed=False,
+        stack_check="original",
+        stack_center_tol=0.015,
+        stack_height_tol=0.006,
+        stack_max_tilt=10.0,
+        stack_max_speed=0.05,
+        cubeB_max_tilt=5.0,
+        cubeB_max_shift=0.01,
+        success_hold_steps=1,
     ):
+        assert stack_check in ("original", "strict"), "stack_check must be 'original' or 'strict'"
+        self.cubeB_fixed = cubeB_fixed
+        self.stack_check = stack_check
+        self.stack_center_tol, self.stack_height_tol = stack_center_tol, stack_height_tol
+        self.stack_max_tilt, self.stack_max_speed = stack_max_tilt, stack_max_speed
+        self.cubeB_max_tilt, self.cubeB_max_shift = cubeB_max_tilt, cubeB_max_shift
+        self.success_hold_steps = success_hold_steps
+        self._stack_now, self._stack_hold, self._cubeB_start = False, 0, None
         # alignment reward while cubeA is lifted: align_weight * (1 - tanh(align_sharpness * horizontal distance to cubeB))
         self.align_weight = align_weight
         self.align_sharpness = align_sharpness
@@ -329,6 +361,10 @@ class Stack(SingleArmEnv):
 
         # stacking is successful when the block is lifted and the gripper is not holding the object
         r_stack = 0
+        if self.stack_check == "strict":
+            if self._stack_now:
+                r_stack = 2.0 * 5
+            return r_reach, r_lift, r_stack
         cubeA_touching_cubeB = self.check_contact(self.cubeA, self.cubeB)
         if not grasping_cubeA and r_lift > 0 and cubeA_touching_cubeB:
             r_stack = 2.0 * 5
@@ -392,6 +428,7 @@ class Stack(SingleArmEnv):
             size_max=half_b or [0.025, 0.025, 0.025],
             rgba=[0, 1, 0, 1],
             material=greenwood,
+            joints=None if self.cubeB_fixed else "default",  # no free joint = static body
         )
         cubes = [self.cubeA, self.cubeB]
         # Create placement initializer 1
@@ -465,7 +502,50 @@ class Stack(SingleArmEnv):
 
             # Loop through all objects and reset their positions
             for obj_pos, obj_quat, obj in object_placements.values():
+                if obj is self.cubeB:
+                    self._cubeB_start = np.array(obj_pos)
+                if obj is self.cubeB and self.cubeB_fixed:
+                    # static body: place it directly, resting on the table (no 1 cm drop)
+                    pos = np.array([obj_pos[0], obj_pos[1], self.table_offset[2] + self.cubeB.size[2]])
+                    self.sim.model.body_pos[self.cubeB_body_id] = pos
+                    self.sim.model.body_quat[self.cubeB_body_id] = obj_quat
+                    self._cubeB_start = pos
+                    continue
                 self.sim.data.set_joint_qpos(obj.joints[0], np.concatenate([np.array(obj_pos), np.array(obj_quat)]))
+
+        self._stack_now, self._stack_hold = False, 0
+
+    @staticmethod
+    def _flat_tilt(rot):
+        """tilt (deg) of a box away from lying flat on any of its faces"""
+        return np.degrees(np.arccos(np.clip(np.max(np.abs(rot[2, :])), -1.0, 1.0)))
+
+    def _stacked_strict(self):
+        """stack_check "strict": cubeA rests flat and centred on an upright, unmoved cubeB, settled, untouched by the gripper"""
+        a = self.sim.data.body_xpos[self.cubeA_body_id]
+        b = self.sim.data.body_xpos[self.cubeB_body_id]
+        if abs((a[2] - self.cubeA.size[2]) - (b[2] + self.cubeB.size[2])) > self.stack_height_tol:
+            return False
+        if np.linalg.norm(a[:2] - b[:2]) > self.stack_center_tol:
+            return False
+        if self._flat_tilt(self.sim.data.body_xmat[self.cubeA_body_id].reshape(3, 3)) > self.stack_max_tilt:
+            return False
+        if self._flat_tilt(self.sim.data.body_xmat[self.cubeB_body_id].reshape(3, 3)) > self.cubeB_max_tilt:
+            return False
+        if self._cubeB_start is not None and np.linalg.norm(b[:2] - self._cubeB_start[:2]) > self.cubeB_max_shift:
+            return False
+        if np.linalg.norm(self.sim.data.get_body_xvelp(self.cubeA.root_body)) > self.stack_max_speed:
+            return False
+        if not self.check_contact(self.cubeA, self.cubeB):
+            return False
+        return not self.check_contact(self.robots[0].gripper, self.cubeA)
+
+    def _post_action(self, action):
+        # update the stack state once per control step, before the reward / success are read
+        if self.stack_check == "strict":
+            self._stack_now = self._stacked_strict()
+            self._stack_hold = self._stack_hold + 1 if self._stack_now else 0
+        return super()._post_action(action)
 
     def _setup_observables(self):
         """
@@ -543,6 +623,8 @@ class Stack(SingleArmEnv):
         Returns:
             bool: True if blocks are correctly stacked
         """
+        if self.stack_check == "strict":
+            return self._stack_hold >= self.success_hold_steps
         _, _, r_stack = self.staged_rewards()
         return r_stack > 0
 

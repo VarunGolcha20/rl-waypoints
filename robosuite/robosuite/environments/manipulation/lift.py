@@ -71,6 +71,24 @@ class Lift(SingleArmEnv):
 
         cube_full_size (None or 3-tuple): full cube dimensions (x, y, z) in metres. None = the original 40 mm cube.
 
+        cube_x_range, cube_y_range (2-tuple): cube spawn ranges relative to the table centre. Default: the original
+            [-0.03, 0.03] each.
+
+        lift_check (str): "absolute" (original): the cube counts as lifted when its centre is > table + 4 cm, whatever
+            holds it (a tilted or flicked 55 mm cube passes after 1.25 cm). "grasped": lifted only while both finger
+            pads hold the cube, its centre is >= lift_height above its resting height and it is tilted no more than
+            lift_max_tilt degrees from lying flat. Both the success check and the per-step "lifted" reward use it.
+
+        lift_height (float): required rise of the cube centre above its resting height (m), for lift_check "grasped".
+
+        lift_max_tilt (float): largest tilt (deg) away from lying flat on a face, for lift_check "grasped".
+
+        success_hold_steps (int): for lift_check "grasped", success needs the lifted condition for this many
+            consecutive control steps (1 = instantaneous). The per-step reward is paid from the first step.
+
+        push_penalty (float): subtracted from each step's (scaled) reward while the cube is > push_threshold (m) from
+            where it spawned (horizontally) and not grasped. 0 (original) = no penalty.
+
         has_renderer (bool): If true, render the simulation state in
             a viewer instead of headless mode.
 
@@ -170,8 +188,25 @@ class Lift(SingleArmEnv):
         object_type='test',
         use_latch=False,
         cube_full_size=None,
+        cube_x_range=(-0.03, 0.03),
+        cube_y_range=(-0.03, 0.03),
+        lift_check="absolute",
+        lift_height=0.04,
+        lift_max_tilt=15.0,
+        success_hold_steps=1,
+        push_penalty=0.0,
+        push_threshold=0.02,
     ):
+        assert lift_check in ("absolute", "grasped"), "lift_check must be 'absolute' or 'grasped'"
         self.cube_full_size = cube_full_size
+        self.cube_x_range, self.cube_y_range = list(cube_x_range), list(cube_y_range)
+        self.lift_check = lift_check
+        self.lift_height = lift_height
+        self.lift_max_tilt = lift_max_tilt
+        self.success_hold_steps = success_hold_steps
+        self.push_penalty = push_penalty
+        self.push_threshold = push_threshold
+        self._lift_now, self._lift_hold, self._cube_start_xy = False, 0, None
         # settings for table top
         self.table_full_size = table_full_size
         self.table_friction = table_friction
@@ -241,8 +276,8 @@ class Lift(SingleArmEnv):
         """
         reward = 0.0
 
-        # sparse completion reward
-        if self._check_success():
+        # sparse completion reward ("grasped" check: paid on every step the cube is held up, before the hold count)
+        if (self._lift_now if self.lift_check == "grasped" else self._check_success()):
             reward = 2.25
 
         # use a shaping reward
@@ -262,6 +297,12 @@ class Lift(SingleArmEnv):
         # Scale reward if requested
         if self.reward_scale is not None:
             reward *= self.reward_scale / 2.25
+
+        # penalty for pushing the cube around without holding it
+        if self.push_penalty > 0 and self._cube_start_xy is not None:
+            moved = np.linalg.norm(self.sim.data.body_xpos[self.cube_body_id][:2] - self._cube_start_xy)
+            if moved > self.push_threshold and not self._check_grasp(gripper=self.robots[0].gripper, object_geoms=self.cube):
+                reward -= self.push_penalty
 
         return reward
 
@@ -318,8 +359,8 @@ class Lift(SingleArmEnv):
             self.placement_initializer = UniformRandomSampler(
                 name="ObjectSampler",
                 mujoco_objects=self.cube,
-                x_range=[-0.03, 0.03],
-                y_range=[-0.03, 0.03],
+                x_range=self.cube_x_range,
+                y_range=self.cube_y_range,
                 rotation=0,
                 rotation_axis='z',
                 ensure_object_boundary_in_range=False,
@@ -406,6 +447,26 @@ class Lift(SingleArmEnv):
             # Loop through all objects and reset their positions
             for obj_pos, obj_quat, obj in object_placements.values():
                 self.sim.data.set_joint_qpos(obj.joints[0], np.concatenate([np.array(obj_pos), np.array(obj_quat)]))
+                self._cube_start_xy = np.array(obj_pos[:2])
+
+        self._lift_now, self._lift_hold = False, 0
+
+    def _lifted_and_grasped(self):
+        """lift_check "grasped": both pads hold the cube, centre >= lift_height above rest, roughly flat"""
+        cube_z = self.sim.data.body_xpos[self.cube_body_id][2]
+        rest_z = self.model.mujoco_arena.table_offset[2] + self.cube.size[2]
+        if cube_z - rest_z < self.lift_height:
+            return False
+        rot = self.sim.data.body_xmat[self.cube_body_id].reshape(3, 3)
+        tilt = np.degrees(np.arccos(np.clip(np.max(np.abs(rot[2, :])), -1.0, 1.0)))  # 0 when lying flat on any face
+        return tilt <= self.lift_max_tilt and self._check_grasp(gripper=self.robots[0].gripper, object_geoms=self.cube)
+
+    def _post_action(self, action):
+        # update the lift state once per control step, before the reward / success are read
+        if self.lift_check == "grasped":
+            self._lift_now = self._lifted_and_grasped()
+            self._lift_hold = self._lift_hold + 1 if self._lift_now else 0
+        return super()._post_action(action)
 
     def visualize(self, vis_settings):
         """
@@ -430,6 +491,9 @@ class Lift(SingleArmEnv):
         Returns:
             bool: True if cube has been lifted
         """
+        if self.lift_check == "grasped":
+            return self._lift_hold >= self.success_hold_steps
+
         cube_height = self.sim.data.body_xpos[self.cube_body_id][2]
         table_height = self.model.mujoco_arena.table_offset[2]
 

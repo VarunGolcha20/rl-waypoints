@@ -23,7 +23,7 @@ from scipy.spatial.transform import Rotation as R
 HERE = os.path.dirname(os.path.abspath(__file__))
 RLWP = os.path.join(HERE, "..", "rlwp")
 sys.path.insert(0, RLWP)
-from common import get_controller_config, get_env_kwargs, orientation_hold_action  # noqa: E402
+from common import get_controller_config, get_env_kwargs, lift_first_error, orientation_hold_action  # noqa: E402
 
 import robosuite as suite  # noqa: E402
 
@@ -34,7 +34,8 @@ CEILING = {"z": 0.905}  # highest waypoint z: set per task from its workspace bo
 # --- hand-designed waypoints: (target xyz, gripper command) x 2, from settled object positions -------------------
 def plan_lift(env, obs):
     c = obs["cube_pos"]
-    return [(c + [0, 0, 0.005], 1.0), (c + [0, 0, 0.05], 1.0)]
+    # lift 7 cm: the arm sags ~1 cm under the cube, and a "grasped" lift check needs >= 4 cm of real rise
+    return [(c + [0, 0, 0.005], 1.0), (c + [0, 0, 0.07], 1.0)]
 
 
 def plan_stack(env, obs):
@@ -117,7 +118,7 @@ def run(task, episodes, seed, robot="omp", env_kwargs=None):
         success, time_s = False, 0
         for t in range(len(wps) * wp_steps):  # rlwp's get_action
             i = t // wp_steps
-            err = wps[i][0] - obs["robot0_eef_pos"]
+            err = lift_first_error(wps[i][0] - obs["robot0_eef_pos"], i, env_cfg.get("lift_first", False))
             if t < 10:
                 a = np.r_[10 * err, 0, 0, 0, -1.0]
             elif time_s >= wp_steps - gripper_steps:
