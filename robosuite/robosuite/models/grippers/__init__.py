@@ -11,7 +11,7 @@ from .jaco_three_finger_gripper import JacoThreeFingerGripper, JacoThreeFingerDe
 from .robotiq_140_gripper import Robotiq140Gripper
 from .wiping_gripper import WipingGripper
 from .null_gripper import NullGripper
-from .omx_gripper import OMXGripper
+from .omx_gripper import OMXGripper, OMXNativeGripper
 
 
 GRIPPER_MAPPING = {
@@ -25,6 +25,7 @@ GRIPPER_MAPPING = {
     "RobotiqThreeFingerGripper": RobotiqThreeFingerGripper,
     "RobotiqThreeFingerDexterousGripper": RobotiqThreeFingerDexterousGripper,
     "OMXGripper": OMXGripper,
+    "OMXNativeGripper": OMXNativeGripper,
     None: NullGripper,
 }
 

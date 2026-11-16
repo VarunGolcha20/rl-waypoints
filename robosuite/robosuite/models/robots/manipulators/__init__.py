@@ -7,3 +7,4 @@ from .kinova3_robot import Kinova3
 from .iiwa_robot import IIWA
 from .ur5e_robot import UR5e
 from .open_manipulator_p_robot import OpenManipulatorP
+from .open_manipulator_x_robot import OpenManipulatorX

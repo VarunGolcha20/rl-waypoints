@@ -4,6 +4,9 @@ This fork adds a ROBOTIS **OpenMANIPULATOR-P** (6-DoF) with the **OpenMANIPULATO
 robosuite, and lets `rlwp` train and evaluate on it. The original Panda workflow from [ReadMe.md](ReadMe.md) is
 unchanged: Panda results are bit-identical with the same seed.
 
+> **The full OpenMANIPULATOR-X (4-DoF) is supported too**, see [§9](#9-openmanipulator-x-4-dof-the-users-robot). It is
+> the robot actually used; the OM-P sections below remain valid for the OM-P.
+
 Background documents (in the parent folder `RLproj/`):
 `PORTING_PLAN.md` (why), `RETRAINING_PLAN.md` (what changes for training, sim-to-real), `IMPLEMENTATION_LOG.md`
 (every file changed, with verification results).
@@ -240,3 +243,32 @@ For Stack, the size of the bottom cube matters most for *learning*: rlwp only le
 exploratory releases land on it often enough. With 30 mm cubes, training reached 35 % / 0 % / 48 % (2 waypoints) and
 38 % / 0 % / 33 % (3 waypoints, which learned to hover over cubeB). A 50 mm cubeB gives ~2.8× the landing area.
 
+
+## 9. OpenMANIPULATOR-X (4-DoF, the user's robot)
+
+The full ROBOTIS **OpenMANIPULATOR-X** (RM-X52-TNM: 4 × XM430 arm + its own XM430 gripper) is also available, as robot
+`OpenManipulatorX` (branch `omx-port`). **Results and findings: [OMX_PORT.md](OMX_PORT.md).** Everything above works
+the same way with the `_omx` task configs:
+
+```bash
+python omp_tools/check_omx_arm.py                          # arm model vs ROBOTIS' MJCF / URDF, tool-down reach map (~5 s)
+python omp_tools/check_omx_env.py                          # placement, OSC, controller comparison, scripted pick (~4 min)
+python omp_tools/check_omp_tasks.py --robot omx            # Lift_omx / Stack_omx solvable with 2 waypoints (~2 min)
+python omp_tools/check_omp_workspace.py --robot OpenManipulatorX [--reuse]   # waypoint reachability grid (~10 min)
+PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/show_omp_tasks.py --robot omx    # the OM-X task layouts
+omp_tools/train_omp.sh -t Lift_omx  -s "0 1 2" -n omx_lift                    # train + evaluate
+omp_tools/train_omp.sh -t Stack_omx -s "0 1 2" -n omx_stack
+python omp_tools/check_real_success.py --task Stack_omx --runs omx_stack_s1   # robosuite's success vs real outcome
+PYGLFW_LIBRARY_VARIANT=x11 python omp_tools/view_policy.py --task Stack_omx --run omx_stack_s1 --seed 1000  # watch, with verdicts
+```
+
+| | OpenMANIPULATOR-X setup |
+|---|---|
+| Model | arm `robosuite/.../robots/open_manipulator_x/robot.xml` (ROBOTIS jazzy MJCF, FK identical), gripper `OMXNativeGripper` (no adapter, grip point 0.126 m past joint 4) |
+| Base | 1.7 cm plate on the table top (`OMX_BASE_PLATE_SIZE` in `robosuite/.../mounts/omx_base_mount.py`), base at x = −0.17 m |
+| Start pose | `[0, −0.307, 0.249, 1.629]`: gripper down, 0.12 m in front of the base, 0.087 m above the table |
+| Reach (gripper down) | 6–24 cm from the base axis, table to ~12 cm above it. Joint 4's upper limit is the binding one |
+| Controller | `default_open_manipulator_x.json`: **uncoupled** OSC, kp 300, **yaw kp 0**. A 4-DoF arm can't hold a fixed gripper yaw (it follows the target's bearing), and the coupled OSC used for the OM-P then can't move it sideways at all |
+| Grasping | the fingers open across the line from the base, so objects are approached head-on from the base (radially) |
+| Lift_omx | 55 mm cube, spawn ±3 cm around (0, 0) = 14–20 cm out. Workspace x [−0.07, 0.03], y ±0.10, z [0.825, 0.905] |
+| Stack_omx | cubeA 55 mm at x −0.05…−0.02, y −0.03…0 (12–15 cm out); cubeB 65 mm in a 17 mm recess at x −0.07…−0.04, y 0.12…0.15 (16–20 cm out, ~50° left). Workspace x [−0.07, −0.02], y ±0.15, z [0.825, 0.905] |

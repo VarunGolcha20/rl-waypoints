@@ -1,0 +1,30 @@
+# Lift with the OpenMANIPULATOR-X (4-DoF, its own gripper), base on the 1.7 cm plate. Run with task=Lift_omx.
+# Same schedule as Lift.yaml (paper values) so results compare with Panda / OM-P; the env block adds the OM-X settings.
+name: Lift
+
+env:
+  robot: 'OpenManipulatorX'
+  controller: 'default_open_manipulator_x'   # uncoupled OSC, kp 300, yaw kp 0 (4-DoF arm, see IMPLEMENTATION_LOG X1)
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 10
+  orientation_hold: False                    # not needed: the controller keeps the gripper pointing down (X1)
+  env_kwargs:
+    cube_full_size: [0.055, 0.055, 0.055]    # 55 mm cube (user's choice), spawns x, y +-3 cm = 14-20 cm from the base
+  workspace:                                 # from omp_tools/check_omp_workspace.py --robot OpenManipulatorX (base x -0.17,
+    low:  [-0.07, -0.10, 0.825]              #   1.7 cm plate): every grid point tracked to < 1 cm; floor 0.825 = fingertips
+    high: [ 0.03,  0.10, 0.905]              #   4 mm above the table
+
+
+task:
+  action_space: 0.5                          # still bounds the gripper dimension
+  batch_size: 30
+  epoch_wp: 200
+
+  exploration_epoch: 75
+  ensemble_sampling_epoch: 100
+  averaging_noise_epoch: 175
+  rand_reset_epoch: 150
+
+  num_eval: 100

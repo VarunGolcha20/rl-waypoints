@@ -1,0 +1,77 @@
+<mujoco model="open_manipulator_x">
+    <!--
+    ROBOTIS OpenMANIPULATOR-X (RM-X52-TNM), 4-DoF arm without its gripper part (the gripper, i.e. OM-X link5 = the
+    housing with the gripper servo + both fingers, is the robosuite gripper "OMXNativeGripper", attached at right_hand).
+
+    Source: ROBOTIS-GIT/open_manipulator, branch jazzy (commit 9f84095, 2026-09-28),
+            open_manipulator_description/mujoco/open_manipulator_x/open_manipulator_x.xml (+ urdf/ for the check)
+      - kinematics (body positions, joint axes, joint ranges), masses, inertias, damping / armature / frictionloss:
+        copied 1:1 from ROBOTIS' MuJoCo model (it matches their URDF; omp_tools/check_omx_arm.py compares FK)
+      - meshes: ROBOTIS' STL files, unchanged (mm, scaled by 0.001)
+    Changes vs ROBOTIS' model:
+      - torque motors instead of position actuators (robosuite OSC outputs torques); ctrlrange = +-4.1 N m, the
+        XM430-W350 stall torque at 12 V that ROBOTIS' model also uses as forcerange
+      - visual (group 1) and collision geoms split the robosuite way
+      - link5 is an empty joint4 body (tiny inertial); its mass / inertia / mesh are in the gripper model
+      - "right_hand" body at the joint4 axis (= OM-X link5 origin), rotated so its +z is the OM-X approach axis
+        (link5 +x), which is where robosuite attaches grippers
+    -->
+    <!-- robosuite's world file already uses radians; this makes the file correct when loaded standalone too -->
+    <compiler angle="radian"/>
+    <actuator>
+        <motor ctrllimited="true" ctrlrange="-4.1 4.1" joint="joint1" name="torq_j1"/>
+        <motor ctrllimited="true" ctrlrange="-4.1 4.1" joint="joint2" name="torq_j2"/>
+        <motor ctrllimited="true" ctrlrange="-4.1 4.1" joint="joint3" name="torq_j3"/>
+        <motor ctrllimited="true" ctrlrange="-4.1 4.1" joint="joint4" name="torq_j4"/>
+    </actuator>
+    <asset>
+        <mesh name="link1" file="meshes/link1.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="link2" file="meshes/link2.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="link3" file="meshes/link3.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="link4" file="meshes/link4.stl" scale="0.001 0.001 0.001"/>
+        <material name="omx_dark" specular="0.5" shininess="0.3" rgba="0.2 0.2 0.2 1"/>
+        <material name="omx_grey" specular="0.5" shininess="0.3" rgba="0.55 0.55 0.58 1"/>
+    </asset>
+    <worldbody>
+        <!-- base = OM-X link1 (fixed) -->
+        <body name="base" pos="0 0 0">
+            <camera mode="fixed" name="robotview" pos="0.6 0 0.35" quat="0.653 0.271 0.271 0.653"/>
+            <inertial pos="0.000308762 0 -0.000121765" quat="0.506551 0.493362 0.493362 0.506551" mass="0.07912" diaginertia="2.18984e-05 1.92721e-05 1.25005e-05"/>
+            <geom mesh="link1" material="omx_dark" type="mesh" contype="0" conaffinity="0" group="1" name="link1_visual"/>
+            <geom mesh="link1" type="mesh" rgba="0.7 0.7 0.7 1" name="link1_collision"/>
+            <body name="link2" pos="0.012 0 0">
+                <inertial pos="-0.000301849 0.000540437 0.0474335" quat="0.999915 0.000960074 0.0122201 -0.00449872" mass="0.0984068" diaginertia="3.4553e-05 3.26892e-05 1.88409e-05"/>
+                <joint name="joint1" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14159 3.14159" damping="0.1" armature="0.1" frictionloss="0.1"/>
+                <geom mesh="link2" pos="0 0 0.019" material="omx_grey" type="mesh" contype="0" conaffinity="0" group="1" name="link2_visual"/>
+                <geom mesh="link2" pos="0 0 0.019" type="mesh" rgba="0.7 0.7 0.7 1" name="link2_collision"/>
+                <body name="link3" pos="0 0 0.0595">
+                    <inertial pos="0.0103084 0.000377434 0.101702" quat="0.71133 0.0466763 0.0513691 0.699423" mass="0.138509" diaginertia="0.000342915 0.000335932 5.49578e-05"/>
+                    <joint name="joint2" pos="0 0 0" axis="0 1 0" limited="true" range="-1.5 1.5" damping="0.1" armature="0.1" frictionloss="0.1"/>
+                    <geom mesh="link3" material="omx_grey" type="mesh" contype="0" conaffinity="0" group="1" name="link3_visual"/>
+                    <geom mesh="link3" type="mesh" rgba="0.7 0.7 0.7 1" name="link3_collision"/>
+                    <body name="link4" pos="0.024 0 0.128">
+                        <inertial pos="0.0909096 0.000389298 0.000224133" quat="-0.00162881 0.706672 0.0026348 0.707535" mass="0.132746" diaginertia="0.000251551 0.000242311 3.06462e-05"/>
+                        <joint name="joint3" pos="0 0 0" axis="0 1 0" limited="true" range="-1.5 1.4" damping="0.1" armature="0.1" frictionloss="0.1"/>
+                        <geom mesh="link4" material="omx_grey" type="mesh" contype="0" conaffinity="0" group="1" name="link4_visual"/>
+                        <geom mesh="link4" type="mesh" rgba="0.7 0.7 0.7 1" name="link4_collision"/>
+                        <body name="link5" pos="0.124 0 0">
+                            <!-- tiny placeholder: the real link5 (gripper housing) mass / inertia is in the gripper model -->
+                            <inertial pos="0 0 0" mass="0.001" diaginertia="1e-07 1e-07 1e-07"/>
+                            <joint name="joint4" pos="0 0 0" axis="0 1 0" limited="true" range="-1.7 1.97" damping="0.1" armature="0.1" frictionloss="0.1"/>
+                            <!-- joint4 axis = OM-X link5 origin. +z of right_hand = link5 +x (approach axis) -->
+                            <body name="right_hand" pos="0 0 0" quat="0.707107 0 0.707107 0">
+                                <camera mode="fixed" name="eye_in_hand" pos="0.05 0 0" quat="0 0.707108 0.707108 0" fovy="75"/>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+    <contact>
+        <!-- as in ROBOTIS' model: link1/link2 touch at joint1 (base is welded to the world, so MuJoCo's
+             parent/child filter does not apply), and link1/link3 meshes overlap slightly at the zero pose -->
+        <exclude body1="base" body2="link2"/>
+        <exclude body1="base" body2="link3"/>
+    </contact>
+</mujoco>

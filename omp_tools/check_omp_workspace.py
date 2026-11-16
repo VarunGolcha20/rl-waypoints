@@ -1,11 +1,12 @@
 """
-Waypoint reachability map for the OpenManipulatorP, as seen by rlwp: each grid point is a waypoint (grip-point
-target, world frame), tracked for one segment (50 steps) with rlwp's rule action = 10 * (target - eef) from the start
-pose (the Lift cube is moved out of the way first, so it can't block targets). Reports tracking error / joint limits /
-tool tilt, and for each task the largest y-symmetric grid box that contains the task's object spawn region and whose grid
-points are all reached, as a `workspace:` block for the rlwp task YAML.
+Waypoint reachability map for the OpenManipulatorP (default) or OpenManipulatorX, as seen by rlwp: each grid point is a
+waypoint (grip-point target, world frame), tracked for one segment (50 steps) with rlwp's rule
+action = 10 * (target - eef) from the start pose (the Lift cube is moved out of the way first, so it can't block
+targets). Reports tracking error / joint limits / tool tilt, and for each task the largest grid box that contains the
+task's object spawn region and whose grid points are all reached, as a `workspace:` block for the rlwp task YAML.
+OM-P boxes are y-symmetric; OM-X boxes may be asymmetric in y (its tasks put the second object to one side).
 
-    MUJOCO_GL=egl python omp_tools/check_omp_workspace.py [--controller default_open_manipulator_p] [--tol 0.01]
+    MUJOCO_GL=egl python omp_tools/check_omp_workspace.py [--robot OpenManipulatorX] [--controller ...] [--tol 0.01]
 """
 import argparse
 import itertools
@@ -37,19 +38,44 @@ TASK_REGIONS = {
 }
 PARKED_CUBE = [0.35, 0.35, 0.82, 1, 0, 0, 0]  # table corner, outside the grid
 
+# OpenManipulatorX (base at x = -0.17 on the 1.7 cm plate; gripper pointing down it reaches ~0.06-0.24 m from the base
+# axis, up to ~12 cm above the table): finer, smaller grid
+OMX_XS = np.round(np.arange(-0.12, 0.081, 0.025), 3)
+OMX_YS = np.round(np.arange(0.0, 0.226, 0.025), 3)  # mirrored to -y
+OMX_ZS = np.round(np.r_[0.825, np.arange(0.83, 0.936, 0.015)], 3)
+# adapted OM-X layouts, rlwp/cfg/task/<Task>_omx.yaml: (x/y region lo, hi, minimum ceiling, z shift, maximum floor).
+# The floor limit keeps the box search (which maximises volume) from giving up the grasp height: the 55 mm cubes are
+# gripped at z ~0.83
+OMX_TASK_REGIONS = {
+    "Lift": ([-0.03, -0.03], [0.03, 0.03], 0.86, 0.0, 0.83),  # cube; lifted = cube centre > table + 4 cm
+    # cubeA straight ahead 12-15 cm out (grasp), cubeB 16-20 cm out, ~45-55 deg to the left (release over it, carry high)
+    "Stack": ([-0.07, -0.03], [-0.02, 0.15], 0.905, 0.0, 0.83),
+}
+
+ROBOTS = {
+    "OpenManipulatorP": dict(controller="default_open_manipulator_p", xs=XS, ys=YS, zs=ZS, regions=TASK_REGIONS,
+                             symmetric=True),
+    "OpenManipulatorX": dict(controller="default_open_manipulator_x", xs=OMX_XS, ys=OMX_YS, zs=OMX_ZS,
+                             regions=OMX_TASK_REGIONS, symmetric=False),
+}
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--controller", default="default_open_manipulator_p")
+    ap.add_argument("--robot", default="OpenManipulatorP", choices=list(ROBOTS))
+    ap.add_argument("--controller", default=None, help="controller config name (default: the robot's own)")
     ap.add_argument("--tol", type=float, default=0.01)
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--out", default=os.path.join(HERE, "out"))
     ap.add_argument("--reuse", action="store_true", help="recompute the boxes from the saved grid results instead of simulating")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    rc = ROBOTS[args.robot]
+    args.controller = args.controller or rc["controller"]
+    XS, YS, ZS, TASK_REGIONS = rc["xs"], rc["ys"], rc["zs"], rc["regions"]
 
     cfg = load_controller_config(custom_fpath=os.path.join(CONTROLLER_DIR, args.controller + ".json"))
-    env = suite.make("Lift", robots="OpenManipulatorP", controller_configs=cfg, has_renderer=False,
+    env = suite.make("Lift", robots=args.robot, controller_configs=cfg, has_renderer=False,
                      has_offscreen_renderer=False, use_camera_obs=False, initialization_noise=None,
                      control_freq=10, hard_reset=False)
     robot = env.robots[0]
@@ -96,33 +122,41 @@ def main():
         for z in ZS[::-1]:
             print(" %.3f  " % z + "".join("     ." if ok[(x, y, z)] else "%6.0f" % (100 * res[(x, y, z)]["err"]) for x in XS))
 
-    # Per task: largest box [x0, x1] x [-yh, yh] x [z0, z1] (grid-aligned) containing the task's spawn region,
-    # with every grid point inside it within tolerance
-    for task, (rlo, rhi, ztop, zshift) in TASK_REGIONS.items():
+    # Per task: largest box [x0, x1] x [y0, y1] x [z0, z1] (grid-aligned) containing the task's spawn region, with every
+    # grid point inside it within tolerance. y0 = -y1 for symmetric robots (OM-P); the grid is mirrored to -y.
+    YF = np.unique(np.r_[-YS, YS])
+    okf = lambda x, y, z: ok[(x, YS[np.abs(YS - abs(y)).argmin()], z)]
+    for task, region in TASK_REGIONS.items():
+        rlo, rhi, ztop, zshift = region[:4]
+        zfloor = region[4] if len(region) > 4 else np.inf  # highest acceptable box floor (OM-P regions: no limit)
         best, best_vol = None, -1
+        if rc["symmetric"]:
+            ypairs = [(-yh, yh) for yh in YS]
+        else:
+            ypairs = [(YF[j0], YF[j1]) for j0, j1 in itertools.combinations_with_replacement(range(len(YF)), 2)]
+        ypairs = [(y0, y1) for y0, y1 in ypairs if y0 <= rlo[1] + 1e-9 and rhi[1] <= y1 + 1e-9]
         for i0, i1 in itertools.combinations_with_replacement(range(len(XS)), 2):
-            if not (XS[i0] <= rlo[0] and rhi[0] <= XS[i1]):
+            if not (XS[i0] <= rlo[0] + 1e-9 and rhi[0] <= XS[i1] + 1e-9):
                 continue
             for k0, k1 in itertools.combinations_with_replacement(range(len(ZS)), 2):
-                if ZS[k1] < ztop:
+                if ZS[k1] < ztop or ZS[k0] > zfloor + 1e-9:
                     continue
-                for jh in range(len(YS)):
-                    if YS[jh] < max(-rlo[1], rhi[1]):
-                        continue
-                    pts = itertools.product(XS[i0:i1 + 1], YS[:jh + 1], ZS[k0:k1 + 1])
-                    if all(ok[p] for p in pts):
-                        vol = (XS[i1] - XS[i0]) * YS[jh] * (ZS[k1] - ZS[k0])
+                for y0, y1 in ypairs:
+                    ys = YF[(YF >= y0 - 1e-9) & (YF <= y1 + 1e-9)]
+                    if all(okf(x, y, z) for x, y, z in itertools.product(XS[i0:i1 + 1], ys, ZS[k0:k1 + 1])):
+                        vol = (XS[i1] - XS[i0]) * (y1 - y0) * (ZS[k1] - ZS[k0])
                         if vol > best_vol:
-                            best, best_vol = (XS[i0], XS[i1], YS[jh], ZS[k0], ZS[k1]), vol
-        print("\n%s (objects x [%.2f, %.2f], y [%.2f, %.2f], ceiling >= %.3f):" % (task, rlo[0], rhi[0], rlo[1], rhi[1], ztop))
+                            best, best_vol = (XS[i0], XS[i1], y0, y1, ZS[k0], ZS[k1]), vol
+        print("\n%s (objects x [%.2f, %.2f], y [%.2f, %.2f], ceiling >= %.3f%s):" % (
+            task, rlo[0], rhi[0], rlo[1], rhi[1], ztop, ", floor <= %.3f" % zfloor if np.isfinite(zfloor) else ""))
         if best is None:
             print("  no fully reachable box contains the spawn region up to that ceiling -> move the base or shrink the spawn region")
             continue
-        x0, x1, yh, z0, z1 = best
-        print("  box x [%.2f, %.2f], y [%.2f, %.2f], z [%.3f, %.3f]  (relative to start eef: dx [%+.2f, %+.2f], "
-              "dz [%+.3f, %+.3f])" % (x0, x1, -yh, yh, z0, z1, x0 - start[0], x1 - start[0], z0 - start[2], z1 - start[2]))
-        print("  rlwp task YAML (env:)%s:\n    workspace:\n      low:  [%.2f, %.2f, %.3f]\n      high: [%.2f, %.2f, %.3f]" % (
-            " (z shifted by %+.2f for this task's table)" % zshift if zshift else "", x0, -yh, z0 + zshift, x1, yh, z1 + zshift))
+        x0, x1, y0, y1, z0, z1 = best
+        print("  box x [%.3f, %.3f], y [%.3f, %.3f], z [%.3f, %.3f]  (relative to start eef: dx [%+.3f, %+.3f], "
+              "dz [%+.3f, %+.3f])" % (x0, x1, y0, y1, z0, z1, x0 - start[0], x1 - start[0], z0 - start[2], z1 - start[2]))
+        print("  rlwp task YAML (env:)%s:\n    workspace:\n      low:  [%.3f, %.3f, %.3f]\n      high: [%.3f, %.3f, %.3f]" % (
+            " (z shifted by %+.2f for this task's table)" % zshift if zshift else "", x0, y0, z0 + zshift, x1, y1, z1 + zshift))
 
     if not args.reuse:
         json.dump({"%.3f,%.3f,%.3f" % k: v for k, v in res.items()}, open(path, "w"), indent=1)

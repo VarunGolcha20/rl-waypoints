@@ -1,12 +1,13 @@
 """
-Is each OM-P task solvable with rlwp's waypoint scheme (2 waypoints; Stack3: 3)? For every task this builds the env exactly as rlwp does
-(from rlwp/cfg/task/<Task>_omp.yaml: controller, env_kwargs, wp_steps, gripper_steps, orientation hold) and executes a
+Is each OM-P (or, with --robot omx, OM-X) task solvable with rlwp's waypoint scheme (2 waypoints; Stack3: 3)? For every
+task this builds the env exactly as rlwp does (from rlwp/cfg/task/<Task>_omp.yaml or <Task>_omx.yaml: controller,
+env_kwargs, wp_steps, gripper_steps, orientation hold) and executes a
 hand-designed pair of waypoints with rlwp's own action rule (50-step segments, gripper open for the first 10 steps,
 gripper command only in the last gripper_steps of each segment). Reports success rate, whether the scripted waypoints
 lie inside the task's workspace box (they are clipped into it, as rlwp's optimiser is; "clipped" counts episodes where
 that moved a waypoint by more than 5 mm), and the worst tool tilt.
 
-    MUJOCO_GL=egl python omp_tools/check_omp_tasks.py [--tasks Lift Stack ...] [--episodes 15]
+    MUJOCO_GL=egl python omp_tools/check_omp_tasks.py [--robot omp|omx] [--tasks Lift Stack ...] [--episodes 15]
 
 A pass means the task layout and the waypoint parametrisation work on this robot. It says nothing about how fast
 rlwp will learn those waypoints.
@@ -82,13 +83,16 @@ PLANS = {"Lift": plan_lift, "Stack": plan_stack, "Stack3": plan_stack3, "NutAsse
          "Door": plan_door}
 
 
-def load_task(name):
-    cfg = yaml.safe_load(open(os.path.join(RLWP, "cfg", "task", name + "_omp.yaml")))
+def load_task(name, robot="omp"):
+    cfg = yaml.safe_load(open(os.path.join(RLWP, "cfg", "task", "%s_%s.yaml" % (name, robot))))
     return cfg["name"], cfg["env"]
 
 
-def run(task, episodes, seed):
-    env_name, env_cfg = load_task(task)
+def run(task, episodes, seed, robot="omp", env_kwargs=None):
+    """env_kwargs: extra / overriding env arguments (for trying layouts without editing the YAML)"""
+    env_name, env_cfg = load_task(task, robot)
+    if env_kwargs:
+        env_cfg = dict(env_cfg, env_kwargs=dict(env_cfg.get("env_kwargs") or {}, **env_kwargs))
     env = suite.make(env_name, robots=env_cfg["robot"], controller_configs=get_controller_config(env_cfg),
                      has_renderer=False, has_offscreen_renderer=False, use_camera_obs=False, reward_shaping=True,
                      control_freq=10, initialization_noise=None, hard_reset=False,
@@ -101,8 +105,9 @@ def run(task, episodes, seed):
     ok, outside, tilt = 0, 0, 0.0
     for _ in range(episodes):
         env.reset()
-        for _ in range(3):  # let objects settle before reading their positions
-            obs = env.step(np.zeros(env.action_dim))[0]
+        for _ in range(3):  # let objects settle before reading their positions; gripper kept open as rlwp does from
+            # step 0 (a 0 gripper action drives the OM-X fingers to mid-range, a 54 mm gap, narrower than a 55 mm cube)
+            obs = env.step(np.r_[np.zeros(env.action_dim - 1), -1.0])[0]
         wps = PLANS[task](env, obs)
         if ws is not None:
             clipped = [(np.clip(w, ws["low"], ws["high"]), g) for w, g in wps]
@@ -133,12 +138,14 @@ def run(task, episodes, seed):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tasks", nargs="+", default=list(PLANS))
+    ap.add_argument("--robot", default="omp", choices=["omp", "omx"], help="task configs <Task>_<robot>.yaml")
+    ap.add_argument("--tasks", nargs="+", default=None, help="default: every task with a <Task>_<robot>.yaml")
     ap.add_argument("--episodes", type=int, default=15)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
-    for task in args.tasks:
-        ok, outside, tilt = run(task, args.episodes, args.seed)
+    tasks = args.tasks or [t for t in PLANS if os.path.exists(os.path.join(RLWP, "cfg", "task", "%s_%s.yaml" % (t, args.robot)))]
+    for task in tasks:
+        ok, outside, tilt = run(task, args.episodes, args.seed, args.robot)
         print("%-12s scripted waypoint success %2d/%d | episodes with a waypoint clipped > 5 mm by the workspace box: %d | "
               "max tool tilt %.1f deg" % (task, ok, args.episodes, outside, tilt), flush=True)
 

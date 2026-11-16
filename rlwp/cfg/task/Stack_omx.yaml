@@ -1,0 +1,37 @@
+# Stack with the OpenMANIPULATOR-X (4-DoF, its own gripper), base on the 1.7 cm plate. Run with task=Stack_omx.
+# Same schedule and reward settings as Stack_omp.yaml; the layout is redesigned for the OM-X's short, radial reach (X2).
+name: Stack
+
+env:
+  robot: 'OpenManipulatorX'
+  controller: 'default_open_manipulator_x'
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 15
+  orientation_hold: False
+  env_kwargs:                                # layout for the OM-X (base x -0.17; gripper down it reaches ~6-24 cm out):
+    cubeA_x_range: [-0.05, -0.02]            # cubeA straight ahead, 12-15 cm from the base (radial approach: the fingers
+    cubeA_y_range: [-0.03, 0.00]             #   open across the line from the base, so cubes are grasped head-on)
+    cubeB_x_range: [-0.07, -0.04]            # cubeB 16-20 cm out, ~45-55 deg to the left: far enough from cubeA that the
+    cubeB_y_range: [0.12, 0.15]              #   straight carry lifts cubeA over it, near enough to reach at carry height
+    cubeA_full_size: [0.055, 0.055, 0.055]   # carried cube 55 mm (user's choice)
+    cubeB_full_size: [0.065, 0.065, 0.048]   # landing cube 65 mm set 17 mm deep in a recess: 48 mm above the table
+    align_weight: 3.0                        # as Stack_omp (IMPLEMENTATION_LOG T7i)
+    align_sharpness: 20.0
+    relative_stack_check: true               # as Stack_omp (T7d)
+  workspace:                                 # from omp_tools/check_omp_workspace.py --robot OpenManipulatorX
+    low:  [-0.07, -0.15, 0.825]
+    high: [-0.02,  0.15, 0.905]
+
+task:
+  action_space: 0.5
+  batch_size: 30
+  epoch_wp: 300
+
+  exploration_epoch: 75
+  ensemble_sampling_epoch: 150
+  averaging_noise_epoch: 250
+  rand_reset_epoch: 250
+
+  num_eval: 100

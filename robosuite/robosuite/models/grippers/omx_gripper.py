@@ -1,5 +1,8 @@
 """
-Gripper from ROBOTIS OpenMANIPULATOR-X (two parallel fingers on a rack-and-pinion), mounted via an adapter plate.
+Gripper from ROBOTIS OpenMANIPULATOR-X (two parallel fingers on a rack-and-pinion).
+
+OMXGripper: mounted on another arm (the OpenMANIPULATOR-P) via an adapter plate.
+OMXNativeGripper: on its own OpenMANIPULATOR-X arm (no adapter, gripper root on the joint4 axis).
 """
 import numpy as np
 
@@ -15,8 +18,11 @@ class OMXGripperBase(GripperModel):
         idn (int or str): Number or some other unique identification string for this gripper instance
     """
 
+    # gripper MJCF (subclasses for other mountings override this)
+    XML = "grippers/omx_gripper.xml"
+
     def __init__(self, idn=0):
-        super().__init__(xml_path_completion("grippers/omx_gripper.xml"), idn=idn)
+        super().__init__(xml_path_completion(self.XML), idn=idn)
 
     def format_action(self, action):
         return action
@@ -65,3 +71,12 @@ class OMXGripper(OMXGripperBase):
     @property
     def dof(self):
         return 1
+
+
+class OMXNativeGripper(OMXGripper):
+    """
+    OMXGripper on its own OpenMANIPULATOR-X arm: no adapter plate, gripper root = joint4 axis, grip point 0.126 m
+    along the approach axis (ROBOTIS end_effector_link). Same fingers, actuators and action convention.
+    """
+
+    XML = "grippers/omx_native_gripper.xml"
