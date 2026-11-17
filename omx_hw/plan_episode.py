@@ -1,8 +1,8 @@
 """
 Plan one Lift / Stack episode for the real OpenMANIPULATOR-X from hand-measured cube positions (no ROS, no hardware).
 
-    cd rl-waypoints && .venv/bin/python omx_hw/plan_episode.py --task Lift  --cube 19.5 -1.0 --out plan_lift.json
-    cd rl-waypoints && .venv/bin/python omx_hw/plan_episode.py --task Stack --cubeA 18.5 -1.5 --cubeB 11.5 13.5 --out plan_stack.json
+    cd rl-waypoints && ../.venv/bin/python omx_hw/plan_episode.py --task Lift  --cube 19.5 -1.0 --out plan_lift.json
+    cd rl-waypoints && ../.venv/bin/python omx_hw/plan_episode.py --task Stack --cubeA 18.5 -1.5 --cubeB 11.5 13.5 --out plan_stack.json
     ... add --view to watch the planned motion and the simulated episode in MuJoCo's viewer
 
 Positions are in centimetres in the ROBOT BASE frame: origin on joint 1's rotation axis, x forward (straight out from
@@ -177,6 +177,39 @@ class Kinematics:
         return q, float(np.linalg.norm(target - p)), self.tilt_deg(q)
 
 
+def retreat_contacts(env, end_qpos, steps, margin=0.005):
+    """replay the plan's retreat steps (gripper open) in the simulated end state and report the closest approach of the
+    robot / gripper to a cube (None if nothing comes within `margin`). The planner's playback is kinematic, so without
+    this nothing would notice the arm sweeping through the stacked cube"""
+    m = env.sim.model._model
+    d = mujoco.MjData(m)
+    d.qpos[:] = end_qpos
+    robot = env.robots[0]
+    qi, gq = robot._ref_joint_pos_indexes, robot._ref_gripper_joint_pos_indexes
+    cubes = {i for i in range(m.ngeom) if m.geom_bodyid[i] in (env.cubeA_body_id, env.cubeB_body_id)}
+    arm = {i for i in range(m.ngeom) if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, i) or "").startswith(("robot0_", "gripper0_"))}
+    saved = {g: m.geom_margin[g] for g in cubes}
+    worst = None
+    try:
+        for g in cubes:
+            m.geom_margin[g] = margin
+        for s in steps:
+            if s["type"] != "arm" or not s["label"].startswith("retreat"):
+                continue
+            for pt in s["points"]:
+                d.qpos[qi] = pt["q"]
+                d.qpos[gq] = [0.02, -0.02]
+                mujoco.mj_forward(m, d)
+                for c in d.contact[:d.ncon]:
+                    pair = {c.geom1, c.geom2}
+                    if pair & cubes and pair & arm and (worst is None or c.dist < worst[0]):
+                        worst = (c.dist, s["label"].split(":")[1].strip()[:40], pt["t"])
+    finally:
+        for g, v in saved.items():
+            m.geom_margin[g] = v
+    return None if worst is None else "%.1f mm at t %.1f s of '%s'" % (1000 * worst[0], worst[2], worst[1])
+
+
 # ------------------------------------------------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -197,8 +230,13 @@ def main():
     ap.add_argument("--min-clearance-mm", type=float, default=3.0,
                     help="keep the fingers at least this far above the table: in the simulation the table stops the "
                          "arm, a position-controlled real arm would press into it instead")
+    ap.add_argument("--retreat-pull-cm", type=float, default=6.0,
+                    help="Stack retreat: pull the open gripper this far straight back toward the base after the release")
+    ap.add_argument("--retreat-rise-cm", type=float, default=1.5,
+                    help="Stack retreat: rise this much while pulling back")
     ap.add_argument("--allow-outside", action="store_true", help="plan even if a cube is outside the trained spawn area")
     ap.add_argument("--view", action="store_true", help="show the planned robot motion, then the simulated episode")
+    ap.add_argument("--view-loop", action="store_true", help="as --view, but replay both until the window is closed")
     ap.add_argument("--out", default=None, help="plan file (JSON) for execute_plan.py")
     ap.add_argument("--seed", type=int, default=0, help="seed of the waypoint optimiser's random restarts")
     args = ap.parse_args()
@@ -227,10 +265,11 @@ def main():
     kw = ec["env_kwargs"]
     ranges = ({"cube": (kw["cube_x_range"], kw["cube_y_range"])} if name == "Lift" else
               {"cubeA": (kw["cubeA_x_range"], kw["cubeA_y_range"]), "cubeB": (kw["cubeB_x_range"], kw["cubeB_y_range"])})
-    warnings = []
+    warnings, areas = [], {}
     print("\n%s with model %s; positions in the robot base frame (cm), trained spawn area in brackets:" % (task_name, run))
     for k in need:
         xr, yr = [(np.array(r) + env.table_offset[i] - axis[i]) * 100 for i, r in enumerate(ranges[k])]
+        areas[k] = (tuple(xr), tuple(yr))
         x, y = measured[k]
         inside = xr[0] - 0.5 <= x <= xr[1] + 0.5 and yr[0] - 0.5 <= y <= yr[1] + 0.5
         print("  %-6s x %5.1f [%5.1f, %5.1f]  y %5.1f [%5.1f, %5.1f]  %s" % (k, x, xr[0], xr[1], y, yr[0], yr[1],
@@ -251,6 +290,7 @@ def main():
 
     # predicted outcome: the same episode in the simulator
     success, end, record = rollout(env, task, traj, targets, obs)
+    end_qpos = env.sim.data.qpos.copy()  # simulated end state (cubes where the episode left them), for the retreat check
     if name == "Lift":
         rise = end["cube_pos"][2] - (env.table_offset[2] + env.cube.size[2])
         outcome = "lifted %.1f cm, success %s" % (100 * rise, success)
@@ -329,10 +369,42 @@ def main():
         gripper("retreat: release the cube", "open")
         q = arm_step("retreat: back to the start pose (waypoint 1 motion backwards)", moves[0][::-1][1:] + [q_start], q, dt)
     else:
-        q = arm_step("retreat: back to the start pose (simulated motion backwards, gripper open)",
-                     moves[1][::-1][1:] + moves[0][::-1] + [q_start], q, dt)
+        # after a release (Stack) the open fingers straddle the cube just stacked: retracing the carry would sweep them
+        # through it (checked: 22 mm deep), and straight up is out of reach at this distance. Pull straight back toward
+        # the base instead (the fingers slide off along the cube's faces), rising a little, then go to the start pose.
+        # The cube lands where the off-centre grasp (P1) puts it, so a fixed pull isn't always enough: the joint-space
+        # move to the start pose then swings a finger through it. Try larger pulls / rises until the retreat is
+        # reachable and clear of both cubes in the simulated end state.
+        p0 = kin.fk(q)
+        radial = np.r_[p0[:2] - axis, 0.0]
+        radial /= np.linalg.norm(radial)
+        q_rel, n_before = np.array(q), len(steps)
+        options = [(args.retreat_pull_cm, args.retreat_rise_cm)] + [o for o in ((8, 3), (10, 4), (12, 5))
+                                                                     if o[0] > args.retreat_pull_cm]
+        for i_opt, (pull, rise) in enumerate(options):
+            del steps[n_before:]
+            n = max(2, int(np.ceil(pull / 0.5)))
+            seq, qq, e_max, t_max = [], q_rel, 0.0, 0.0
+            for k in range(1, n + 1):
+                f = k / n
+                qq, e, tilt = kin.ik(p0 - f * pull / 100.0 * radial + [0, 0, f * rise / 100.0], qq)
+                e_max, t_max = max(e_max, e), max(t_max, tilt)
+                seq.append(qq)
+            q = arm_step("retreat: pull the open gripper %.0f cm straight back toward the base (rising %.1f cm), out "
+                         "from around the stacked cube" % (pull, rise), seq, q_rel, dt)
+            q = arm_step("retreat: back to the start pose", interp(np.array(q), q_start), q, 0.05)
+            if e_max <= 0.003 and not retreat_contacts(env, end_qpos, steps[n_before:]):
+                break
+        worst["ik_err"], worst["tilt"] = max(worst["ik_err"], e_max), max(worst["tilt"], t_max)
     for st in steps:
         st["optional"] = st["label"].startswith("retreat")
+
+    if name == "Stack":
+        hit = retreat_contacts(env, end_qpos, steps)
+        if hit:
+            warnings.append("the retreat brings the gripper within 5 mm of a cube in the simulated end state (%s)" % hit)
+        else:
+            print("retreat checked against the simulated end state: the gripper stays > 5 mm from both cubes")
 
     if worst["ik_err"] > 0.003:
         warnings.append("IK error up to %.1f mm" % (1000 * worst["ik_err"]))
@@ -353,9 +425,6 @@ def main():
     for w in warnings:
         print("WARNING: " + w)
 
-    if args.view:
-        view(env, kin, steps, task, traj, targets, cubes_world, name, start_q)
-
     if args.out:
         plan = {"task": task_name, "run": run, "measured_cm": {k: measured[k].tolist() for k in need},
                 "plate_cm": args.plate_cm, "z_offset_cm": args.z_offset_cm, "waypoints_base_cm": [
@@ -363,45 +432,130 @@ def main():
                     for i in range(2)], "gripper": grip, "predicted": outcome, "warnings": warnings,
                 "arm_joints": ARM_JOINTS, "expected_start": ROS_HOME, "steps": steps}
         out = os.path.abspath(os.path.join(HERE, "..", args.out) if not os.path.isabs(args.out) else args.out)
-        json.dump(plan, open(out, "w"), indent=1)
-        print("\nplan written to %s" % out)
+        json.dump(plan, open(out + ".tmp", "w"), indent=1)
+        os.replace(out + ".tmp", out)  # atomic: run_trials.py waits for this file while the viewer opens
+        print("\nplan written to %s" % out, flush=True)
+
+    if args.view or args.view_loop:  # after writing the plan, so the plan can be used while the viewer is open
+        frame = (axis, env.table_offset[2], [(k, tuple(measured[k]), areas[k]) for k in need])
+        view(env, kin, steps, task, traj, targets, cubes_world, name, start_q, loop=args.view_loop, frame=frame)
 
 
-def view(env, kin, steps, task, traj, targets, cubes_world, name, start_q):
-    """1) the robot plan (kinematic playback, cubes in place), 2) the simulated episode. Close the window to go on."""
+# ------------------------------------------------------------------------------------------- measuring aids in viewer
+def add_base_frame(scn, axis, table_z, cubes, x_len_cm=26, y_half_cm=15):
+    """draw the robot base frame used for measuring into a MuJoCo scene (viewer.user_scn or a Renderer's scene):
+    origin on joint 1's axis at table height, x (red) straight out along the arm at joint1 = 0, y (green) to the
+    robot's left; ticks every cm, labelled every 5 cm; per cube (label, (x, y) cm, ((x0, x1), (y0, y1))
+    trained area cm or None): the trained area (yellow), the target cross, guide lines to the axes and its coordinates"""
+    z0 = table_z + 0.0008  # just above the table surface
+
+    def w(x_cm, y_cm, dz=0.0):  # base frame (cm) -> world (m)
+        return np.array([axis[0] + x_cm / 100.0, axis[1] + y_cm / 100.0, z0 + dz])
+
+    def geom(gtype, rgba, label=""):
+        if scn.ngeom >= scn.maxgeom:
+            return None
+        g = scn.geoms[scn.ngeom]
+        mujoco.mjv_initGeom(g, gtype, np.zeros(3), np.zeros(3), np.eye(3).flatten(), np.array(rgba, dtype=np.float32))
+        g.label = label
+        scn.ngeom += 1
+        return g
+
+    def line(a, b, rgba, width=0.0012, gtype=mujoco.mjtGeom.mjGEOM_CAPSULE, label=""):
+        g = geom(gtype, rgba, label)
+        if g is not None:
+            mujoco.mjv_connector(g, gtype, width, a, b)
+
+    def text(pos, label, rgba=(1, 1, 1, 1)):
+        g = geom(mujoco.mjtGeom.mjGEOM_SPHERE, rgba, label)
+        if g is not None:
+            g.size[:] = [0.0015, 0, 0]
+            g.pos[:] = pos
+
+    RED, GREEN, YELLOW, CUBE = (0.9, 0.1, 0.1, 1), (0.1, 0.75, 0.1, 1), (1, 0.85, 0, 1), (1, 0.2, 0.9, 1)
+    arrow = mujoco.mjtGeom.mjGEOM_ARROW
+    line(w(0, 0), w(x_len_cm, 0), RED, 0.002, arrow)
+    line(w(0, -y_half_cm), w(0, y_half_cm), GREEN, 0.0015)
+    line(w(0, 0), w(0, y_half_cm + 1), GREEN, 0.002, arrow)
+    text(w(x_len_cm + 2, 0), "x (cm)", RED)
+    text(w(0, y_half_cm + 6), "y (cm, robot's left)", GREEN)
+    text(w(-1, -1), "0 (joint 1 axis)")
+    for c in range(1, x_len_cm):
+        big = c % 5 == 0
+        h = 0.6 if big else 0.3
+        line(w(c, -h), w(c, h), RED, 0.0009 if big else 0.0006)
+        if big:
+            text(w(c, -1.6), "%d" % c, RED)
+    for c in range(-y_half_cm, y_half_cm + 1):
+        if c == 0:
+            continue
+        big = c % 5 == 0
+        h = 0.6 if big else 0.3
+        line(w(-h, c), w(h, c), GREEN, 0.0009 if big else 0.0006)
+        if big:
+            text(w(-1.8, c), "%+d" % c, GREEN)
+    for label, (cx, cy), area in cubes:
+        if area is not None:
+            (x0, x1), (y0, y1) = area
+            for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
+                line(w(*a), w(*b), YELLOW, 0.0008)
+            text(w(x0, y0 - 9), "trained area" if len(cubes) == 1 else "trained area " + label, YELLOW)
+        line(w(cx, 0), w(cx, cy), CUBE, 0.0006)  # guide lines: x along the x axis, y across
+        line(w(0, cy), w(cx, cy), CUBE, 0.0006)
+        line(w(cx - 1.5, cy), w(cx + 1.5, cy), CUBE, 0.0009)
+        line(w(cx, cy - 1.5), w(cx, cy + 1.5), CUBE, 0.0009)
+        text(w(cx, cy, 0.075), "%s (x %.1f, y %+.1f) cm" % (label, cx, cy), CUBE)
+
+
+def view(env, kin, steps, task, traj, targets, cubes_world, name, start_q, loop=False, frame=None):
+    """1) the robot plan (kinematic playback, cubes in place), 2) the simulated episode; with loop, again and again.
+    Close the window to go on."""
     import mujoco.viewer
-    print("\nviewer: first the planned robot motion, then the simulated episode (close the window to finish)")
+    print("\nviewer: first the planned robot motion, then the simulated episode%s (close the window to finish)" % (
+        ", repeated" if loop else ""), flush=True)
     with mujoco.viewer.launch_passive(env.sim.model._model, env.sim.data._data) as viewer:
         viewer.cam.lookat[:], viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = (-0.06, 0.04, 0.86), 0.65, 145, -25
         with viewer.lock():
             viewer.opt.geomgroup[0] = 0
-        env.reset()
-        place_cubes(env, name, cubes_world)
-        robot = env.robots[0]
-        gq = robot._ref_gripper_joint_pos_indexes
-        for s in steps:
-            if not viewer.is_running():
-                return
-            if s["type"] == "gripper":  # kinematic playback: show the command, don't simulate contacts
-                env.sim.data.qpos[gq] = [0.02, -0.02] if s["command"] == "open" else [0.005, -0.005]
-                env.sim.forward()
-                viewer.sync()
-                time.sleep(0.5)
-                continue
-            t0 = 0.0
-            for pt in s["points"]:
-                env.sim.data.qpos[robot._ref_joint_pos_indexes] = pt["q"]
-                env.sim.forward()
-                viewer.sync()
-                time.sleep(min(0.05, max(0.0, pt["t"] - t0) / 4))  # 4x faster than the robot
-                t0 = pt["t"]
-        time.sleep(1.0)
-        obs = env.reset()
-        obs = place_cubes(env, name, cubes_world)
-        rollout(env, task, traj, targets, obs, viewer)
+            if frame is not None:  # measuring aids: robot base frame, cm ticks, trained areas, cube targets
+                add_base_frame(viewer.user_scn, *frame)
+        _view_once(env, viewer, steps, task, traj, targets, cubes_world, name)
+        while loop and viewer.is_running():
+            time.sleep(1.5)
+            _view_once(env, viewer, steps, task, traj, targets, cubes_world, name)
         while viewer.is_running():
             viewer.sync()
             time.sleep(0.05)
+
+
+def _view_once(env, viewer, steps, task, traj, targets, cubes_world, name):
+    """one playback of the robot plan, then the simulated episode"""
+    env.reset()
+    place_cubes(env, name, cubes_world)
+    robot = env.robots[0]
+    gq = robot._ref_gripper_joint_pos_indexes
+    for s in steps:
+        if not viewer.is_running():
+            return
+        if s["type"] == "gripper":  # kinematic playback: show the command, don't simulate contacts
+            env.sim.data.qpos[gq] = [0.02, -0.02] if s["command"] == "open" else [0.005, -0.005]
+            env.sim.forward()
+            viewer.sync()
+            time.sleep(0.5)
+            continue
+        t0 = 0.0
+        for pt in s["points"]:
+            env.sim.data.qpos[robot._ref_joint_pos_indexes] = pt["q"]
+            env.sim.forward()
+            viewer.sync()
+            time.sleep(min(0.05, max(0.0, pt["t"] - t0) / 4))  # 4x faster than the robot
+            t0 = pt["t"]
+    time.sleep(1.0)
+    if not viewer.is_running():
+        return
+    obs = env.reset()
+    obs = place_cubes(env, name, cubes_world)
+    rollout(env, task, traj, targets, obs, viewer)
 
 
 if __name__ == "__main__":

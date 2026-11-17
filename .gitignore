@@ -1,3 +1,5 @@
 outputs
 __pycache__
 rlwp/logs
+omx_hw/trials/
+omx_hw/plans/

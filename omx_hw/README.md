@@ -5,9 +5,16 @@ Two scripts take a trained Lift / Stack model to the real OM-X (U2D2, ROS 2 Jazz
 | Script | Runs where | Needs | Does |
 |---|---|---|---|
 | `plan_episode.py` | this repo's virtualenv | nothing on the robot side | from hand-measured cube positions: asks the trained model for its waypoints, **simulates the episode with exactly those positions** (predicted outcome), turns it into a joint-space plan for the robot, checks it, writes a plan file (JSON); `--view` shows it |
+| `scan_bus.py` | anywhere with `dynamixel_sdk`, bringup NOT running | the U2D2 | read-only check of the 5 motors: IDs, voltage, temperature, errors, joint angles; nothing moves |
+| `run_trials.py` | this repo's virtualenv, ROS 2 sourced | both of the above | repeated trials at random positions: plan + MuJoCo viewer (with the measuring axes), you place the cubes, the robot runs, you log the outcome |
+| `sim_sweep.py` | this repo's virtualenv | nothing | success map of a trained model on a grid of positions (simulation), to see where it works beyond its trained area |
 | `execute_plan.py` | where ROS 2 Jazzy is sourced (natively or in ROBOTIS' Docker container) | `rclpy`, `control_msgs`, `trajectory_msgs`, `sensor_msgs` | plays the plan on the robot, step by step, asking before each step; `--gripper-test` checks the gripper |
 
-**Status: the planner is tested in simulation; the executor has not run on hardware yet.** Its ROS interfaces follow
+**Status (2026-11-17): Lift runs on the real arm** (bus check, start pose, gripper test, and the in-the-air Lift plan,
+which already lifted the cube by its top). **Stack has not run on hardware yet.** Everything, including Stack and
+`run_trials.py`, is also tested against ROBOTIS' bringup with mock hardware (`use_mock_hardware:=true`: moves, gripper,
+Ctrl+C cancel). The planner needs
+the project virtualenv `../.venv` (CPU torch, MuJoCo 3.1.6, gym, hydra-core, robosuite editable). Its ROS interfaces follow
 ROBOTIS' Jazzy configuration (`open_manipulator_bringup/config/open_manipulator_x/`): `arm_controller`
 (JointTrajectoryController, `/arm_controller/follow_joint_trajectory`, joints `joint1`..`joint4`) and
 `gripper_controller` (GripperActionController on `gripper_left_joint`, −0.011 … 0.020 m). Two things those files
@@ -64,18 +71,23 @@ other positions unless `--allow-outside`):
 
 ```bash
 # 1) plan (in rl-waypoints, virtualenv). Check the printout: inside the trained area, predicted outcome, warnings.
-.venv/bin/python omx_hw/plan_episode.py --task Lift --cube 18.5 -1.0 --out plan_lift.json --view
-.venv/bin/python omx_hw/plan_episode.py --task Stack --cubeA 17.5 -1.5 --cubeB 10.5 13.5 --out plan_stack.json --view
+../.venv/bin/python omx_hw/plan_episode.py --task Lift --cube 18.5 -1.0 --out plan_lift.json --view
+../.venv/bin/python omx_hw/plan_episode.py --task Stack --cubeA 17.5 -1.5 --cubeB 10.5 13.5 --out plan_stack.json --view
 
-# 2) ROS 2 terminal 1: ROBOTIS bringup with the U2D2 (the arm moves to its home pose)
-ros2 launch open_manipulator_bringup open_manipulator_x.launch.py port_name:=/dev/ttyUSB0
-#    check: ros2 action list   -> /arm_controller/follow_joint_trajectory and a gripper action
+# 0) bringup NOT running: read-only bus check (IDs 11-15, voltage, errors; torque stays off, nothing moves)
+python3 omx_hw/scan_bus.py
 
-# 3) ROS 2 terminal 2, first session only: does "open" open and "close" close?
-python3 execute_plan.py --gripper-test
+# 2) ROS 2 terminal 1: ROBOTIS bringup with the U2D2. init_position:=false: torque on, the arm holds where it is
+#    (without it, ROBOTIS' node moves the arm to their home [0, -1, 1, 0] within 3 s, unprompted)
+ros2 launch open_manipulator_bringup open_manipulator_x.launch.py port_name:=/dev/ttyUSB0 init_position:=false
+#    check: ros2 action list   -> /arm_controller/follow_joint_trajectory and /gripper_controller/gripper_cmd
+
+# 3) ROS 2 terminal 2, first session only: move to the simulation start pose (asks first), then does "open" open
+#    and "close" close?  (--home alone: only the move to the simulation start pose)
+python3 execute_plan.py --gripper-test --time-scale 2
 
 # 4) dry run in the air, no cubes on the table: everything 3 cm higher
-.venv/bin/python omx_hw/plan_episode.py --task Lift --cube 18.5 -1.0 --z-offset-cm 3 --out plan_lift_dry.json
+../.venv/bin/python omx_hw/plan_episode.py --task Lift --cube 18.5 -1.0 --z-offset-cm 3 --out plan_lift_dry.json
 python3 execute_plan.py plan_lift_dry.json
 
 # 5) the real run, cubes at the measured positions
@@ -83,12 +95,48 @@ python3 execute_plan.py plan_lift.json --dry-run    # print the steps
 python3 execute_plan.py plan_lift.json              # Enter = run step, s = skip, q = quit; Ctrl+C cancels a motion
 ```
 
+### Repeated trials at random positions (`run_trials.py`)
+
+Runs the whole loop for N random cube positions inside the trained Lift area (0.5 cm grid, 3 mm inside the edges):
+plan with the learned waypoints → MuJoCo viewer for that position (planned motion + simulated episode, on repeat) →
+you place the cube → the robot picks, lifts, puts it back → you say whether it lifted. Bringup running in terminal 1;
+in terminal 2 (ROS 2 sourced):
+
+```bash
+../.venv/bin/python omx_hw/run_trials.py              # 10 trials; -n 5, --seed 3, --confirm-steps, --no-viewer, --time-scale
+```
+
+Stack: `--task Stack --cubeB X Y` (landing block fixed at its measured position, cubeA random each trial). Dry run in
+the air first, with only the block on the table: `--task Stack --cubeB X Y --z-offset-cm 3 -n 1`.
+
+Outside the trained areas: `--allow-outside` (each plan is still simulated first; a failing or outside position asks
+before running), `--expand-cm N` to grow the random areas, `--cube` / `--cubeA` / `--cubeB X Y` for fixed positions.
+Simulated success beyond the trained areas (2026-11-17, 1 cm grid, one simulation per point; the waypoint boxes are hard
+limits: Lift x 8.8–20.8 / y ±10, Stack x 8.8–18.8 / y −10…15):
+
+| Object | Trained area (x, y) | Succeeded at every grid point in | Never works |
+|---|---|---|---|
+| Lift cube | 16.8–19.8, −3…3 | x 17–20, y −4…+6 | x ≥ 21 with y ≤ −2 / y −8 mostly |
+| Stack cubeA (block at 10.3, 13.5) | 16.3–18.3, −3…0 | x 16–18, y −6…+3 | x ≥ 20 (beyond the grasp box) |
+| Stack landing block (cubeA at 17.3, −1.5) | 8.8–11.8, 12…15 | x 7–13, y 12…15 | y ≤ 11, y ≥ 17, x ≥ 15 |
+
+Reproduce / re-check with `../.venv/bin/python omx_hw/sim_sweep.py --task Stack --object cubeB` (see its `--help`).
+The landing block's narrow y band is a trained-in limit (the release sits at the box edge y = 15 cm, `OMX_PORT.md` P6);
+a larger landing area needs retraining Stack with a wider cubeB range: plan in `OMX_PORT.md` §5.5.
+
+Ctrl+C stops the robot's motion (the arm holds) and the script asks how to go on. Results per session in
+`omx_hw/trials/<date-time>/`: `results.csv` (position, simulated prediction, robot run, real outcome, note) plus every
+plan and log.
+
 Executor options: `--yes` (no confirmations), `--no-retreat`, `--time-scale 2` (twice as slow again),
 `--max-effort`, `--arm-action`, `--gripper-action`.
 
 ## Safety
 
-* Keep a hand on the 12 V power switch during the first runs; Ctrl+C cancels the running motion.
+* Keep a hand on the 12 V power switch during the first runs. **Ctrl+C in the executor's terminal** cancels the running
+  motion and the arm holds its pose (torque stays on; the executor waits for the controller's confirmation).
+  **Stopping the bringup (Ctrl+C) or switching off the power turns the torque off: the arm drops.** Support the arm
+  before you do either.
 * Do the gripper test and the in-the-air dry run (step 4) before putting cubes down.
 * The first move goes from wherever the arm is to the start pose, slowly in joint space; later moves ease in if the arm
   isn't where the plan expects. Nothing checks for obstacles other than the table, and the cubes only via the simulated
@@ -97,6 +145,11 @@ Executor options: `--yes` (no confirmations), `--no-retreat`, `--time-scale 2` (
 
 ## Expected differences from the simulation
 
+* **Stack retreat**: after the release the open fingers straddle the stacked cube, so retracing the carry (the first
+  version) would have swept them 22 mm into it. The planner now pulls the gripper straight back toward the base
+  (6 cm, rising 1.5 cm; up to 12 cm / 5 cm if needed), then returns to the start pose, and checks the whole retreat
+  against the simulated end state (gripper > 5 mm from both cubes). If cubeA lands elsewhere on the real block, watch
+  the retreat (or use `--no-retreat` / `--confirm-steps`).
 * **Stack grasps cubeA ~1 cm off-centre**, toward its far edge (open problem P1 in `OMX_PORT.md` §5.3): the real cube
   may tip in the fingers. Consider fixing P1 before relying on Stack.
 * **Lift swings the cube ~10 cm sideways while lifting** (P3): watch the grasp; slow down with `--time-scale` if needed.

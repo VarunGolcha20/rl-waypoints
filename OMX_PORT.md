@@ -10,8 +10,11 @@ were largely false (full diagnosis in §3). With the fixes in §5.0: **Lift is s
 best** evaluation success under a strict check (grasped, level, ≥ 4 cm up, held 1 s), all verified real (§3, "Retrained
 Lift"). **Stack is solved by one seed**: `omx_stack_v3_s0` stacks 100 % in evaluation under a strict check (cubeA
 flat and centred within 25 mm on a fixed cubeB, released and settled), all verified real; the other two seeds were
-evaluated with early model snapshots (rlwp saving bug, §3 "Retrained Stack"). Open problems: §5.3. Nothing has run on
-hardware yet.
+evaluated with early model snapshots (rlwp saving bug, §3 "Retrained Stack"). Open problems: §5.3.
+
+Hardware (2026-11-17, [omx_hw/](omx_hw/README.md)): bus check, move to the simulation's start pose, gripper test and Lift
+run on the real arm; the in-the-air Lift plan (3 cm above the real grasp) already lifted the cube by its top 2.5 cm.
+Stack has not run on hardware yet. Next for Stack: retrain for a larger landing-block area (§5.5).
 
 ---
 
@@ -307,14 +310,38 @@ end. In ~4 of 10 episodes it slides or tips off onto the table, after robosuite 
 | P3 | **Lift swings the cube ~10 cm sideways while lifting** (waypoint 2 at the top of the box, moved to its side) | §3 "Retrained Lift" | Watch on hardware; if it loosens the grasp, a smaller box or a "stay above the spawn point" term |
 | P4 | **cubeA lands rotated relative to cubeB** (the 4-DoF arm's gripper yaw follows the bearing from the base, so cubeA turns ~50° with joint 1 on the way to cubeB) | visible in the viewer; real successes are unaffected so far | Spawn cubeB turned by its bearing (S5) so the faces meet, if landings need more support |
 | P5 | **`check_real_success.py` is still lenient** (#8): Lift "real" doesn't require a grasp; Stack "real" ignores a moved cubeB / tilted cubeA | the environments' own success is now strict, so the viewer / evaluation numbers are honest; only this tool's "real" column is lenient | Align its criteria with the environments' strict checks |
+| P6 | **Stack's landing block only works in a narrow band (y 12–15 cm).** The release waypoint's y is pinned to the waypoint box's edge (y = 15.0 cm in every plan) while its x follows cubeB, like P1 / #6: within the trained 3 cm y range, releasing at the edge still lands inside the 25 mm centre tolerance, so the model never learned to follow cubeB in y | `omx_hw/sim_sweep.py` (2026-11-17, cubeA at 17.3, −1.5): succeeds at every grid point in x 7–13, y 12–15 (wider than trained in x), never at y ≤ 11 or y ≥ 17, never at x ≥ 15 | **Retrain Stack with a larger cubeB area** (§5.5) |
 
 ### 5.4 After that
 
 **Hardware:** `omx_hw/` ([omx_hw/README.md](omx_hw/README.md)): `plan_episode.py` turns hand-measured cube positions
 into a checked joint-space plan (replay of the simulated episode, predicted outcome) and `execute_plan.py` runs it on the
-real OM-X through ROS 2 Jazzy (ROBOTIS `open_manipulator`, U2D2, 12 V, IDs 11–15, 1 Mbps). Planner tested in
-simulation; executor not yet run on hardware. Use the models only after their *real* success
-rate is good, because the false successes above would not transfer.
+real OM-X through ROS 2 Jazzy (ROBOTIS `open_manipulator`, U2D2, 12 V, IDs 11–15, 1 Mbps); `run_trials.py` runs
+repeated trials at random positions with the MuJoCo viewer and logs real vs simulated outcomes. Status: Lift has run on
+the real arm (2026-11-17); Stack not yet. Simulated success beyond the trained areas: omx_hw/README.md.
+
+### 5.5 Planned: retrain Stack for a larger landing-block area (P6)
+
+Goal: place the landing block anywhere in a larger area (in particular closer to the robot's front, y < 12 cm) and
+have the release follow it. Not started. Steps:
+
+1. **Fix P2 first** (save the final models at the end of training), so all three seeds are evaluated with their
+   final models, not an early snapshot.
+2. **Widen cubeB's spawn range** in `rlwp/cfg/task/Stack_omx.yaml`, mostly in y: e.g. `cubeB_y_range: [0.08, 0.15]`
+   (robot frame y 8–15 cm) and `cubeB_x_range: [-0.09, -0.03]` (x 7–13 cm, already handled in simulation). A spawn range
+   wider than the 25 mm centre tolerance is what forces the release to follow cubeB in y instead of sitting at the box
+   edge; optionally tighten `stack_center_tol` (e.g. 0.015) for the same reason.
+3. **Check the layout before training**: cubeB must not overlap cubeA's area or sit under the carry path (the straight
+   carry rises first, `lift_first`), and every new cubeB position must be reachable at release height:
+   `python omp_tools/check_omp_workspace.py --robot OpenManipulatorX`, then adjust the waypoint box (`workspace:`;
+   y up to 0.15 today) if the new area needs it, and the scripted check `python omp_tools/check_omp_tasks.py --robot omx`.
+4. **Retrain and evaluate**: `omp_tools/train_omp.sh -t Stack_omx -s "0 1 2" -n omx_stack_v4` (~1–2 h on the laptop
+   CPU, seeds in parallel), then `python omp_tools/check_real_success.py --task Stack_omx --runs omx_stack_v4_s0`.
+   A larger area is a harder task: expect to need more episodes (`task.task.epoch_wp`) if success drops.
+5. **Map it and update the hardware tools**: `python omx_hw/sim_sweep.py --task Stack --object cubeB --run
+   omx_stack_v4_s0`, then point `TASKS["Stack"]` in `omx_hw/plan_episode.py` at the new model and update `AREAS` /
+   `BOXES` in `omx_hw/run_trials.py` (the planner reads the trained areas from the task config itself).
+6. P1 (off-centre grasp of cubeA) is a separate reward change; if both are done, retrain once.
 
 ## 6. Reproducing
 

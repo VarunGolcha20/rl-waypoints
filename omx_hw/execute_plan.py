@@ -22,8 +22,14 @@ import sys
 import time
 
 ARM_ACTION = "/arm_controller/follow_joint_trajectory"
+ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4"]
+# start pose of every simulated episode (OpenManipulatorX.init_qpos): gripper pointing straight down, grip point 12 cm
+# in front of joint 1 and 8.7 cm above the table (1.7 cm base plate). Not ROBOTIS' bringup home [0, -1, 1, 0].
+SIM_HOME = [0.0, -0.307, 0.249, 1.629]
 GRIPPER_ACTION_DEFAULT = "/gripper_controller/gripper_cmd"
 GRIPPER_JOINT = "gripper_left_joint"
+# exit status of a plan run (omx_hw/run_trials.py reads it)
+EXIT_OK, EXIT_ERROR, EXIT_QUIT, EXIT_INTERRUPTED = 0, 1, 3, 130
 
 
 def describe(plan, steps):
@@ -46,8 +52,13 @@ class Robot:
         from control_msgs.action import FollowJointTrajectory, GripperCommand
         from sensor_msgs.msg import JointState
 
+        from rclpy.signals import SignalHandlerOptions
+
         self.rclpy, self.FollowJointTrajectory, self.GripperCommand = rclpy, FollowJointTrajectory, GripperCommand
-        rclpy.init()
+        # no rclpy signal handler: by default Ctrl+C shuts the ROS context down before our KeyboardInterrupt handler
+        # runs, so the cancel request could not be sent and the controller would finish the motion
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+        self.pending = None
         self.node = Node("rlwp_execute_plan")
         self.joints = {}
         self.node.create_subscription(JointState, "/joint_states", self._on_joints, 10)
@@ -106,10 +117,10 @@ class Robot:
             sec = int(p["t"])
             pt.time_from_start = Duration(sec=sec, nanosec=int(round((p["t"] - sec) * 1e9)))
             goal.trajectory.points.append(pt)
-        fut = self.arm.send_goal_async(goal)
+        fut = self.pending = self.arm.send_goal_async(goal)
         if not self._wait(fut, 5.0) or not fut.result().accepted:
             raise RuntimeError("arm trajectory rejected by the controller")
-        self.goal_handle = fut.result()
+        self.goal_handle, self.pending = fut.result(), None
         res = self.goal_handle.get_result_async()
         if not self._wait(res, points[-1]["t"] + 10.0):
             raise RuntimeError("arm trajectory did not finish in time")
@@ -122,10 +133,10 @@ class Robot:
         goal = self.GripperCommand.Goal()
         goal.command.position = float(position)
         goal.command.max_effort = float(max_effort)
-        fut = self.gripper.send_goal_async(goal)
+        fut = self.pending = self.gripper.send_goal_async(goal)
         if not self._wait(fut, 5.0) or not fut.result().accepted:
             raise RuntimeError("gripper command rejected")
-        self.goal_handle = fut.result()
+        self.goal_handle, self.pending = fut.result(), None
         res = self.goal_handle.get_result_async()
         finished = self._wait(res, timeout)
         self.goal_handle = None
@@ -137,9 +148,20 @@ class Robot:
             r.reached_goal, r.stalled))
 
     def cancel(self):
-        if self.goal_handle is not None:
-            self.goal_handle.cancel_goal_async()
-            time.sleep(0.2)
+        """cancel the running goal and wait for the controller to confirm (the arm controller then holds position)"""
+        if self.goal_handle is None and self.pending is not None:  # interrupted while the goal was being sent
+            if self._wait(self.pending, 2.0) and self.pending.result().accepted:
+                self.goal_handle = self.pending.result()
+        self.pending = None
+        if self.goal_handle is None:
+            return
+        fut = self.goal_handle.cancel_goal_async()
+        self.goal_handle = None
+        if self._wait(fut, 2.0):
+            print("   cancel confirmed by the controller: motion stopped, the arm holds its position")
+        else:
+            print("   WARNING: no cancel confirmation within 2 s. If the arm is still moving, stop the bringup "
+                  "(torque off: support the arm) or switch off the 12 V supply.")
 
     def shutdown(self):
         self.node.destroy_node()
@@ -172,11 +194,31 @@ def stretched(points, q_now, joint_speed, time_scale, first_move):
     return pts
 
 
+def go_home(robot, args):
+    """move the arm slowly (joint space) from wherever it is to the simulation's start pose; False if the user quit"""
+    q_now = robot.arm_now(ARM_JOINTS)
+    d = max(abs(a - b) for a, b in zip(q_now, SIM_HOME))
+    print("arm now [%s], simulation start pose [%s] (largest joint distance %.2f rad)" % (
+        ", ".join("%+.3f" % v for v in q_now), ", ".join("%+.3f" % v for v in SIM_HOME), d))
+    choice = ask("move the arm to the simulation start pose (gripper pointing down)", args.yes)
+    if choice != "run":
+        return choice != "quit"
+    pts = stretched([{"t": 1.0, "q": SIM_HOME}], q_now, args.joint_speed, args.time_scale, first_move=True)
+    print("   moving (%.1f s)..." % pts[-1]["t"])
+    robot.run_trajectory(ARM_JOINTS, pts)
+    err = max(abs(a - b) for a, b in zip(robot.arm_now(ARM_JOINTS), SIM_HOME))
+    print("   done; largest joint error %.3f rad. The gripper should point straight down, ~12 cm in front of the base "
+          "axis, its grip point ~8.7 cm above the table." % err)
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("plan", nargs="?", help="plan JSON from plan_episode.py")
     ap.add_argument("--dry-run", action="store_true", help="print the steps only (no ROS needed)")
-    ap.add_argument("--gripper-test", action="store_true", help="open, close, open the gripper and report its position")
+    ap.add_argument("--gripper-test", action="store_true",
+                    help="move to the simulation start pose (asks first), then open, close, open the gripper")
+    ap.add_argument("--home", action="store_true", help="only move the arm to the simulation start pose")
     ap.add_argument("--yes", action="store_true", help="don't ask before each step")
     ap.add_argument("--no-retreat", action="store_true", help="stop after the policy's steps (skip the optional retreat)")
     ap.add_argument("--time-scale", type=float, default=1.0, help="extra slow-down factor on top of the plan's timing")
@@ -186,9 +228,25 @@ def main():
     ap.add_argument("--gripper-action", default=None, help="default: the GripperCommand action found on the system")
     args = ap.parse_args()
 
+    if args.home and not args.gripper_test:
+        robot = Robot(args)
+        try:
+            go_home(robot, args)
+        except KeyboardInterrupt:
+            print("\ninterrupted: cancelling the motion (the arm holds where it is)")
+            robot.cancel()
+        except RuntimeError as e:
+            print("\nERROR: %s" % e)
+            robot.cancel()
+        finally:
+            robot.shutdown()
+        return
+
     if args.gripper_test:
         robot = Robot(args)
         try:
+            if not go_home(robot, args):
+                return
             for label, pos in (("open", 0.019), ("close (nothing between the fingers)", -0.010), ("open", 0.019)):
                 if ask("gripper: %s -> gripper_left_joint %.3f m" % (label, pos), args.yes) == "quit":
                     break
@@ -196,6 +254,10 @@ def main():
             print("Check: 'open' must spread the fingers (~82 mm apart), 'close' must bring them together. If it is the "
                   "other way round, don't run plans: tell us, the plan's gripper positions must be swapped.")
         except KeyboardInterrupt:
+            print("\ninterrupted: cancelling the motion (the arm holds where it is)")
+            robot.cancel()
+        except RuntimeError as e:
+            print("\nERROR: %s" % e)
             robot.cancel()
         finally:
             robot.shutdown()
@@ -212,6 +274,7 @@ def main():
     robot = Robot(args)
     names = plan["arm_joints"]
     first_arm = True
+    code = EXIT_OK
     try:
         for i, s in enumerate(steps):
             title = "\nstep %d/%d: %s" % (i + 1, len(steps), s["label"])
@@ -221,6 +284,7 @@ def main():
                 choice = ask(title, args.yes)
             if choice == "quit":
                 print("stopped")
+                code = EXIT_QUIT
                 break
             if choice == "skip":
                 continue
@@ -234,16 +298,20 @@ def main():
                 print("   done; largest joint error at the end %.3f rad" % err)
             else:
                 print("   " + robot.run_gripper(s["position"], args.max_effort))
-        print("\nfinished")
+        if code == EXIT_OK:
+            print("\nfinished")
     except KeyboardInterrupt:
         print("\ninterrupted: cancelling the motion")
         robot.cancel()
+        code = EXIT_INTERRUPTED
     except RuntimeError as e:
         print("\nERROR: %s" % e)
         robot.cancel()
+        code = EXIT_ERROR
     finally:
         robot.shutdown()
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
