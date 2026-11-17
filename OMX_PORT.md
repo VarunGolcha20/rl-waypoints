@@ -310,8 +310,10 @@ end. In ~4 of 10 episodes it slides or tips off onto the table, after robosuite 
 
 ### 5.4 After that
 
-**Hardware:** a runner that executes the learned waypoints on the real OM-X through the U2D2, using the simulator's
-kinematics for IK and the ROBOTIS Jazzy setup (12 V, IDs 11–15, 1 Mbps). Use the models only after their *real* success
+**Hardware:** `omx_hw/` ([omx_hw/README.md](omx_hw/README.md)): `plan_episode.py` turns hand-measured cube positions
+into a checked joint-space plan (replay of the simulated episode, predicted outcome) and `execute_plan.py` runs it on the
+real OM-X through ROS 2 Jazzy (ROBOTIS `open_manipulator`, U2D2, 12 V, IDs 11–15, 1 Mbps). Planner tested in
+simulation; executor not yet run on hardware. Use the models only after their *real* success
 rate is good, because the false successes above would not transfer.
 
 ## 6. Reproducing
