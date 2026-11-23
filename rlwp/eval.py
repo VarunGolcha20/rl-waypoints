@@ -7,12 +7,12 @@ from robosuite.controllers import load_controller_config
 import pickle
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation as R
-from scipy.optimize import minimize, LinearConstraint
+from scipy.optimize import minimize, LinearConstraint, NonlinearConstraint
 import time
 import os, sys
 import random
 from models import RNetwork
-from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action, bounded_solution, lift_first_error
+from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action, bounded_solution, lift_first_error, clip_waypoint, radial_violation
 
 
 class Method(object):
@@ -45,14 +45,22 @@ class Method(object):
 
         # same waypoint bounds as method.Method (original +-action_space when no workspace is configured)
         self.workspace = workspace
+        self.radial = workspace[2] if workspace is not None and len(workspace) > 2 else None  # optional reach ring
         self.lb, self.ub = -self.action_dim*np.ones(self.state_dim), self.action_dim*np.ones(self.state_dim)
         if workspace is not None:
-            self.lb[:3], self.ub[:3] = workspace
+            self.lb[:3], self.ub[:3] = workspace[0], workspace[1]
             self.best_traj = np.concatenate([self.lb + np.random.rand(self.state_dim)*(self.ub - self.lb) for _ in range(self.wp_id)])
+            if self.radial is not None:
+                self.best_traj = np.concatenate([clip_waypoint(w, self.lb, self.ub, self.radial)
+                                                 for w in self.best_traj.reshape(self.wp_id, self.state_dim)])
         else:
             self.best_traj = self.action_dim*(np.random.rand(self.state_dim*self.wp_id) - 0.5)
         self.best_reward = -np.inf
         self.lincon = LinearConstraint(np.eye(self.state_dim), self.lb, self.ub)
+        self.constraints = self.lincon
+        if self.radial is not None:
+            c, r_min, r_max = self.radial
+            self.constraints = [self.lincon, NonlinearConstraint(lambda x: (x[0] - c[0])**2 + (x[1] - c[1])**2, r_min**2, r_max**2)]
 
     def traj_opt(self, i_episode, objs):
         self.reward_idx = random.choice(range(self.n_models))
@@ -69,10 +77,10 @@ class Method(object):
             for t_idx in range(self.n_inits):
                 xi0 = np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim]) + np.random.normal(0, 0.1, size=self.state_dim) if t_idx!=0 else np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim])
                 if self.workspace is not None:
-                    xi0 = np.clip(xi0, self.lb, self.ub)
+                    xi0 = clip_waypoint(xi0, self.lb, self.ub, self.radial)
 
-                res = minimize(self.get_cost, xi0, method='SLSQP', constraints=self.lincon, options={'eps': 1e-6, 'maxiter': 1e6})
-                x, fun = bounded_solution(res, xi0, self.lb, self.ub, self.get_cost)
+                res = minimize(self.get_cost, xi0, method='SLSQP', constraints=self.constraints, options={'eps': 1e-6, 'maxiter': 1e6})
+                x, fun = bounded_solution(res, xi0, self.lb, self.ub, self.get_cost, radial=self.radial)
                 if fun < min_cost:
                     min_cost = fun
                     self.best_wp = x

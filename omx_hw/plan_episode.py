@@ -39,7 +39,11 @@ from eval import Method  # noqa: E402
 
 import robosuite as suite  # noqa: E402
 
-TASKS = {"Lift": ("Lift_omx", "omx_lift_v2_s1"), "Stack": ("Stack_omx", "omx_stack_v3_s0")}
+TASKS = {"Lift": ("Lift_omx", "omx_lift_v2_s1"), "Stack": ("Stack_omx", "omx_stack_v4_s1")}
+# random restarts of the waypoint optimiser (rlwp's n_inits, 5 in training / evaluation). Stack's learned reward has
+# several optima over its large landing area: with 5 restarts the same placement can give an open or a closed release
+# depending on the restarts, with 20 the answer is stable (OMX_PORT.md, "Larger landing area"). Lift is stable with 5.
+N_INITS = {"Lift": 5, "Stack": 20}
 ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4"]
 ROS_HOME = [0.0, -1.0, 1.0, 0.0]          # pose ROBOTIS' bringup moves to (open_manipulator_bringup initial_positions.yaml)
 GRIPPER_OPEN, GRIPPER_CLOSED = 0.019, -0.010  # gripper_left_joint (m); limits -0.011 .. 0.020, 0.020 = fully open (82 mm)
@@ -215,6 +219,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--task", required=True, choices=list(TASKS))
     ap.add_argument("--run", default=None, help="trained model run name (default: best model of the task)")
+    ap.add_argument("--config", default=None, help="task config to use instead of the default (e.g. Stack_omx_v3 for the "
+                                                     "model omx_stack_v3_s0, trained on the previous landing area)")
     ap.add_argument("--cube", nargs=2, type=float, metavar=("X_CM", "Y_CM"), help="Lift: cube centre, robot base frame")
     ap.add_argument("--cubeA", nargs=2, type=float, metavar=("X_CM", "Y_CM"), help="Stack: cube to pick (55 mm)")
     ap.add_argument("--cubeB", nargs=2, type=float, metavar=("X_CM", "Y_CM"), help="Stack: landing cube (65 mm, in recess)")
@@ -239,10 +245,13 @@ def main():
     ap.add_argument("--view-loop", action="store_true", help="as --view, but replay both until the window is closed")
     ap.add_argument("--out", default=None, help="plan file (JSON) for execute_plan.py")
     ap.add_argument("--seed", type=int, default=0, help="seed of the waypoint optimiser's random restarts")
+    ap.add_argument("--n-inits", type=int, default=None, help="random restarts of the waypoint optimiser (default: Lift 5, "
+                                                               "Stack 20)")
     args = ap.parse_args()
 
     name = args.task
     task_name, default_run = TASKS[name]
+    task_name = args.config or task_name
     run = args.run or default_run
     need = ["cube"] if name == "Lift" else ["cubeA", "cubeB"]
     for k in need:
@@ -261,19 +270,33 @@ def main():
     measured = {k: np.array(getattr(args, k)) for k in need}
     cubes_world = [axis + measured[k] / 100.0 for k in need]
 
-    # trained spawn areas, in the robot base frame
+    # trained spawn areas, in the robot base frame: rectangles (x, y ranges) or, for a ring (cubeB_ring), distance and
+    # angle around joint 1's axis
     kw = ec["env_kwargs"]
-    ranges = ({"cube": (kw["cube_x_range"], kw["cube_y_range"])} if name == "Lift" else
-              {"cubeA": (kw["cubeA_x_range"], kw["cubeA_y_range"]), "cubeB": (kw["cubeB_x_range"], kw["cubeB_y_range"])})
-    warnings, areas = [], {}
+    warnings, areas = [], {}  # areas: per cube, the trained area for the viewer's drawing (rectangle or ring sector)
     print("\n%s with model %s; positions in the robot base frame (cm), trained spawn area in brackets:" % (task_name, run))
     for k in need:
-        xr, yr = [(np.array(r) + env.table_offset[i] - axis[i]) * 100 for i, r in enumerate(ranges[k])]
-        areas[k] = (tuple(xr), tuple(yr))
         x, y = measured[k]
-        inside = xr[0] - 0.5 <= x <= xr[1] + 0.5 and yr[0] - 0.5 <= y <= yr[1] + 0.5
-        print("  %-6s x %5.1f [%5.1f, %5.1f]  y %5.1f [%5.1f, %5.1f]  %s" % (k, x, xr[0], xr[1], y, yr[0], yr[1],
-                                                                            "ok" if inside else "OUTSIDE the trained area"))
+        ring = kw.get("cubeB_ring") if k == "cubeB" else None
+        if ring is not None:
+            c = (np.array(ring["center"]) - axis) * 100  # ring centre in the base frame (0, 0 when it is joint 1's axis)
+            r, th = np.hypot(x - c[0], y - c[1]), np.degrees(np.arctan2(y - c[1], x - c[0]))
+            r0, r1 = [100 * v for v in ring["r_range"]]
+            in_r = r0 - 0.5 <= r <= r1 + 0.5
+            in_th = any(lo - 2 <= th <= hi + 2 for lo, hi in ring["angle_ranges"])
+            far = np.linalg.norm(measured[k] - measured["cubeA"]) >= 100 * ring.get("min_distance", 0) - 0.5
+            inside = in_r and in_th and far
+            areas[k] = {"center": tuple(c), "r_range": (r0, r1), "angle_ranges": [tuple(a) for a in ring["angle_ranges"]]}
+            print("  %-6s x %5.1f  y %5.1f  ->  distance %5.1f cm [%.0f, %.0f], angle %+6.1f deg %s%s  %s" % (
+                k, x, y, r, r0, r1, th, " or ".join("[%+.0f, %+.0f]" % tuple(a) for a in ring["angle_ranges"]),
+                "" if far else ", TOO CLOSE to cubeA", "ok" if inside else "OUTSIDE the trained area"))
+        else:
+            rx, ry = kw[k + "_x_range"], kw[k + "_y_range"]
+            xr, yr = [(np.array(rr) + env.table_offset[i] - axis[i]) * 100 for i, rr in enumerate((rx, ry))]
+            inside = xr[0] - 0.5 <= x <= xr[1] + 0.5 and yr[0] - 0.5 <= y <= yr[1] + 0.5
+            areas[k] = (tuple(xr), tuple(yr))
+            print("  %-6s x %5.1f [%5.1f, %5.1f]  y %5.1f [%5.1f, %5.1f]  %s" % (k, x, xr[0], xr[1], y, yr[0], yr[1],
+                                                                                "ok" if inside else "OUTSIDE the trained area"))
         if not inside:
             warnings.append("%s is outside the trained spawn area: the model never saw such a position" % k)
     if warnings and not args.allow_outside:
@@ -283,7 +306,7 @@ def main():
     obs = place_cubes(env, name, cubes_world)
     agent = Method(state_dim=ec["state_dim"], objs=policy_objs(name, obs), wp_id=2,
                    save_name=get_save_name(name, ec["robot"], run, None, ec["use_latch"]),
-                   config={"task": task, "n_inits": 5}, workspace=get_workspace(ec, start))
+                   config={"task": task, "n_inits": args.n_inits or N_INITS[name]}, workspace=get_workspace(ec, start))
     traj = agent.traj_opt(1, policy_objs(name, obs)).reshape(2, ec["state_dim"])
     targets = traj[:, :3] + start
     grip = ["close" if g > 0 else "open" for g in traj[:, 3]]
@@ -445,8 +468,13 @@ def main():
 def add_base_frame(scn, axis, table_z, cubes, x_len_cm=26, y_half_cm=15):
     """draw the robot base frame used for measuring into a MuJoCo scene (viewer.user_scn or a Renderer's scene):
     origin on joint 1's axis at table height, x (red) straight out along the arm at joint1 = 0, y (green) to the
-    robot's left; ticks every cm, labelled every 5 cm; per cube (label, (x, y) cm, ((x0, x1), (y0, y1))
-    trained area cm or None): the trained area (yellow), the target cross, guide lines to the axes and its coordinates"""
+    robot's left; ticks every cm, labelled every 5 cm; per cube (label, (x, y) cm, trained area or None): the trained
+    area (yellow; a rectangle ((x0, x1), (y0, y1)) cm, or a ring sector {"center": (x, y) cm, "r_range": (r0, r1) cm,
+    "angle_ranges": [(lo, hi) deg, ...]}), the target cross, guide lines to the axes and its coordinates"""
+    for _, (cx, cy), area in cubes:  # make the y axis long enough for every area and target
+        ys = [abs(cy)] + ([area["center"][1] + area["r_range"][1]] if isinstance(area, dict) else
+                          [abs(v) for v in area[1]] if area is not None else [])
+        y_half_cm = max(y_half_cm, int(np.ceil(max(ys))) + 1)
     z0 = table_z + 0.0008  # just above the table surface
 
     def w(x_cm, y_cm, dz=0.0):  # base frame (cm) -> world (m)
@@ -495,7 +523,18 @@ def add_base_frame(scn, axis, table_z, cubes, x_len_cm=26, y_half_cm=15):
         if big:
             text(w(-1.8, c), "%+d" % c, GREEN)
     for label, (cx, cy), area in cubes:
-        if area is not None:
+        if isinstance(area, dict):  # ring sector(s): inner / outer arcs and the radial edges
+            (ox, oy), (r0, r1) = area["center"], area["r_range"]
+            pt = lambda r, deg: (ox + r * np.cos(np.radians(deg)), oy + r * np.sin(np.radians(deg)))
+            for lo, hi in area["angle_ranges"]:
+                degs = np.linspace(lo, hi, max(2, int(abs(hi - lo) / 5) + 1))
+                for r in (r0, r1):
+                    for d0, d1 in zip(degs[:-1], degs[1:]):
+                        line(w(*pt(r, d0)), w(*pt(r, d1)), YELLOW, 0.0008)
+                for d in (lo, hi):
+                    line(w(*pt(r0, d)), w(*pt(r1, d)), YELLOW, 0.0008)
+                text(w(*pt(r1 + 2.5, (lo + hi) / 2)), "trained area " + label, YELLOW)
+        elif area is not None:
             (x0, x1), (y0, y1) = area
             for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
                 line(w(*a), w(*b), YELLOW, 0.0008)

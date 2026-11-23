@@ -14,7 +14,11 @@ evaluated with early model snapshots (rlwp saving bug, §3 "Retrained Stack"). O
 
 Hardware (2026-11-17, [omx_hw/](omx_hw/README.md)): bus check, move to the simulation's start pose, gripper test and Lift
 run on the real arm; the in-the-air Lift plan (3 cm above the real grasp) already lifted the cube by its top 2.5 cm.
-Stack has not run on hardware yet. Next for Stack: retrain for a larger landing-block area (§5.5).
+**Stack's landing area was enlarged on 2026-11-22** (the real landing block must stand ≥ 17 cm from the arm): it is now
+17–20 cm from joint 1, in front of its axis (x ≥ 0) with y −20 … +20 cm, i.e. 40°–90° to either side, so also on the
+right (§3 "Larger landing area"). **Retrained**: `omx_stack_v4_s1`, 94 % in evaluation (89 % mean over 3 seeds) when
+waypoints are optimised with 20 random restarts; the previous model `omx_stack_v3_s0` is kept with its old layout as
+`Stack_omx_v3.yaml`. Stack has not run on hardware yet.
 
 ---
 
@@ -48,7 +52,7 @@ grasped head-on (radially).
 | Task | Layout | Waypoint box (world, m) | Scripted 2-waypoint check |
 |---|---|---|---|
 | Lift_omx | 55 mm cube, centre 18–21 cm in front of the base (x 0.01–0.04, y ±0.03; was x ±0.03 = 14–20 cm, see #7) | x [−0.07, 0.05], y ±0.10, z [0.825, 0.905] | 20/20 (lift 7 cm, strict check) |
-| Stack_omx | cubeA 55 mm straight ahead, centre 17.5–19.5 cm out (x 0.005–0.025, y −0.03…0; was 12–15 cm, under the start pose); cubeB 65 mm set 17 mm into a recess (modelled as a fixed 65 × 65 × 48 mm block), 16–20 cm out, ~50° to the left | x [−0.07, 0.03], y [−0.10, 0.15], z [0.825, 0.905] | 19/20 (strict check) |
+| Stack_omx | cubeA 55 mm straight ahead, centre 17.5–19.5 cm out (x 0.005–0.025, y −0.03…0; was 12–15 cm, under the start pose); cubeB 65 mm set 17 mm into a recess (modelled as a fixed 65 × 65 × 48 mm block), **17–20 cm from joint 1, x ≥ 0, y −20 … +20 cm (40°–90° to either side)** (since 2026-11-22; was 16–20 cm out, ~50° to the left) | box x [−0.17, 0.03], y ±0.21, z [0.825, 0.905], cut to 10–21 cm from joint 1 (reach ring) | 39/40 (strict check, new area) |
 
 The waypoint boxes come from a reachability grid (`omp_tools/check_omp_workspace.py --robot OpenManipulatorX`, 810
 targets): every grid point inside a box is tracked to within 1 cm. The scripted check executes hand-designed waypoints
@@ -97,7 +101,7 @@ end of the episode, not held. (20 episodes, so these rates differ somewhat from 
 | Task | Model | Use |
 |---|---|---|
 | Lift | `rlwp/models/OpenManipulatorX/Lift/omx_lift_v2_s1` | **best OM-X Lift model**: 100 % real lifts (see "Retrained Lift" below). The older `omx_lift_s0-2` were trained under the old check and only bump the cube |
-| Stack | `rlwp/models/OpenManipulatorX/Stack/omx_stack_v3_s0` | **best OM-X Stack model**: 100 % strict successes (see "Retrained Stack" below), but grasps cubeA off-centre (§5.3, P1). The older `omx_stack_s0-2` were trained under the old rules (~35 % really stacked) |
+| Stack | `rlwp/models/OpenManipulatorX/Stack/omx_stack_v4_s1` | **best OM-X Stack model, current landing area** (17–20 cm, x ≥ 0, y −20…+20 cm): 94 % in evaluation with 20 optimiser restarts (see "Larger landing area"). `omx_stack_v3_s0`: the previous small landing area (`Stack_omx_v3.yaml`), 100 %, grasps cubeA off-centre (§5.3, P1). The older `omx_stack_s0-2` were trained under the old rules (~35 % really stacked) |
 
 ### Full diagnosis (2026-11-16)
 
@@ -201,6 +205,88 @@ evaluated models are therefore a snapshot from the best-reward episode, not the 
 273 of 300 (saved 2 min before the end), but s1's at episode 67 (still exploring: its snapshot never learned to open
 the gripper) and s2's at episode 91. Their final models, which scored 98 % / 94 % in the last training episodes, were
 not saved. Earlier waypoints are unaffected (saved when training moves to the next waypoint). Fix in §5.3.
+
+### Larger landing area (2026-11-22): config changed, not yet retrained
+
+Lift runs on the real arm. For Stack, the real landing block (the 65 mm cube in its recess) can only stand **17 cm or
+more from the arm**, and the trained area was 15–19 cm away, on the left only. So the landing area was redesigned
+around the arm's actual reach. A first version (2026-11-22) used everything reachable, 40°–150° to either side including
+behind the base (~24× the old area); at the user's request it was narrowed to **in front of joint 1's axis (x ≥ 0) with
+y −20 … +20 cm** (~11× the old area), so both sides but not behind.
+
+**Where can the arm stack?** A scripted grasp → rise-first carry → release over cubeB (rlwp's action rule, strict
+check), for cubeB on a grid of distances and angles around joint 1's axis, each with 3 cubeA positions (centre and two
+extreme corners of its spawn area):
+
+| Distance from joint 1 | Result |
+|---|---|
+| 17, 18.5, 20 cm | succeeds at every angle from ±40° to ±160°; release tracked within 9–20 mm, cubeA lands 1–10 mm off-centre |
+| 21.5 cm | still succeeds, but the release is tracked only within ~30 mm and cubeA lands ~20 mm off-centre (tolerance 25 mm): the edge of the reach with cubeA held above the block |
+| any, ±170° / 180° | fails in part / entirely: the straight carry from cubeA (in front) passes over the arm's own base |
+| any, −30° … +20° | cubeB would overlap cubeA (in front of the robot) |
+
+**New landing area** (robot base frame: origin on joint 1's axis, x forward, y left; angle 0° = straight ahead,
+counter-clockwise = left):
+
+| | Before | Now |
+|---|---|---|
+| distance from joint 1 | 15–19 cm (rectangle x 8.8–11.8 cm, y 12–15 cm) | **17–20 cm** (≥ 17 cm: the real setup; ≤ 20 cm: reach, see above) |
+| x | 8.8 … 11.8 cm | **0 … 15 cm** (in front of joint 1's axis, x ≥ 0) |
+| y | 12 … 15 cm (left only) | **−20 … +20 cm**, both sides; \|y\| ≥ ~11 cm because the front is excluded |
+| angle | ~45°–60° | **+40° … +90° (left) and −40° … −90° (right)** |
+| excluded | | the front 80° (−40° … +40°, cubeA's place) and everything behind the axis (x < 0) |
+| area | 9 cm² | 97 cm² (~11×) |
+
+**What changed** (all options default to the original behaviour; Lift, Panda and OM-P unaffected):
+
+| Where | Change |
+|---|---|
+| Stack env (`stack.py`) | new `cubeB_ring` option: cubeB spawns uniformly by area over a ring sector (centre, distance range, angle ranges), at least `min_distance` from cubeA |
+| rlwp (`common.py`, `method.py`, `eval.py`) | optional **reach ring** for waypoints, `workspace.radial` (centre, r_min, r_max): an axis-aligned box around this horseshoe is mostly unreachable (corners beyond reach, the robot's own base), so waypoints must also lie 10–21 cm (horizontally) from joint 1. Used by exploration (rejection sampling), the optimiser (SLSQP nonlinear constraint) and the waypoint guard (radial projection). Without `radial` every code path and random draw is unchanged |
+| `common.get_env_kwargs` | nested settings (lists inside a dict) are converted from Hydra types |
+| `Stack_omx.yaml` | `cubeB_ring`: centre (−0.158, 0) = joint 1's axis, r 0.17–0.20, angles [40, 90] and [−90, −40], min distance 0.09; workspace box x [−0.17, 0.03], y ±0.21, z [0.825, 0.905] with `radial` r 0.10–0.21 |
+| `Stack_omx_v3.yaml` | the previous layout, unchanged, for the model trained on it (`omx_stack_v3_s0`) |
+| `omx_hw/plan_episode.py` | trained-area check understands the ring (prints distance and angle); `--config` to plan with another task config |
+
+**Verified:** 2000 resets cover the area evenly (x 0–15.1 cm, y −20…+20 cm, 17.0–20.0 cm, ±40°…±90°, half on each
+side, cubeB ≥ 9.6 cm from cubeA); scripted check 39/40 over the new area (and 39/40 over the wider first version);
+the planner accepts positions in the area and refuses others (e.g. behind the axis); training pipeline (smoke run)
+works with the reach ring; seeded smoke runs of Lift_omx, Panda Lift and OM-P Stack bit-identical before / after.
+
+**Retrained: `omx_stack_v4`** (2026-11-22). 3 seeds, the landing area above, two training changes in `Stack_omx.yaml`:
+
+* longer schedule for the ~11× larger area (97 cm² vs 9 cm²): **400 episodes per waypoint** (paper: 300), the
+  exploration / ensemble / noise phases scaled by 4/3 (100 / 200 / 333 / 333);
+* **`save_final_models: True`**: the last waypoint's models are also saved when training ends (new option in
+  `train.py`, default off). Fixes P2: all three seeds were evaluated with their final models (saved at the same second
+  as their last training episode).
+
+~40 min for 3 seeds in parallel. Results table: `rlwp/models/OpenManipulatorX/Stack/omx_stack_v4_summary.md`.
+
+**Random restarts of the waypoint optimiser matter.** rlwp picks the waypoints by optimising the learned reward from
+5 random restarts (`n_inits`). Over this large landing area the learned reward has several optima: for one and the
+same placement, 10 different restart sequences gave a release command anywhere between fully open and fully closed, and
+1/10 … 10/10 successes; occasionally waypoint 2 even landed ~39 cm from cubeB. Evaluation success therefore depended on
+the random stream (e.g. the planner's soft-reset environment drew different restarts than rlwp's evaluation: same
+model, 27/40 vs 37/40; outcomes for identical placements and waypoints are bit-identical in both, so the physics is not
+the cause). With **20 restarts** the answer is stable:
+
+| Seed | Evaluation, 5 restarts (rlwp default) | **Evaluation, 20 restarts** (100 episodes) | Planner path, 20 restarts (40 episodes, by region) | Last 50 training episodes |
+|---|---|---|---|---|
+| s0 | 52 % | **94 %** | 39/40: left 17/18, right 22/22 | 80 % |
+| **s1** | 94 % | **94 %** | 38/40: left 18/18, right 20/22 | 78 % |
+| s2 | 71 % | **80 %** | 40/40: left 18/18, right 22/22 | 84 % |
+| mean | 72 % | **89 %** | | |
+
+Successful landings are a median 11–12 mm off cubeB's centre (max 24 mm). 20 restarts cost 4× the optimisation time
+(a few seconds per plan). `omx_hw/plan_episode.py` now uses 20 restarts for Stack (5 for Lift, unchanged) and
+`omp_tools/view_policy.py` 20 by default (`--n-inits` on both); the 5-restart evaluation stays rlwp's default (and the
+official `eval_data.pkl`; the 20-restart one is `eval_data_restarts20.pkl`). **Best model: `omx_stack_v4_s1`**
+(94 % with 5 and with 20 restarts).
+
+Still to watch: the gripper touches cubeA before the grasp in 5–14 of 40 episodes (v3: 0), so the approach to cubeA
+sometimes grazes it (§5.3, P7). The previous model `omx_stack_v3_s0` stays usable with its old landing area through
+`Stack_omx_v3.yaml` (planner: `--config Stack_omx_v3 --run omx_stack_v3_s0`).
 
 ## 4. Seeing it
 
@@ -306,11 +392,13 @@ end. In ~4 of 10 episodes it slides or tips off onto the table, after robosuite 
 | # | Problem | Evidence | Possible fix |
 |---|---|---|---|
 | P1 | **Stack grasps cubeA off-centre, toward its far edge.** The grasp waypoint is pinned to the box's forward edge (x 0.030) in every episode, wherever cubeA is, so the closer cubeA spawns, the further past its centre it is gripped. In simulation friction holds it; on the real arm the cube could tip or slip in the fingers under its own weight. Cause: nothing in the reward cares where the cube is grasped. Stack's reward is the maximum of the reach / lift / stack stages, and the "close to the cube centre" term only exists in the small reach stage, which stops counting once the cube is lifted, so the learned reward keeps rising toward the box edge (as in #6) | `omx_stack_v3_s0`, 20 episodes: grasp point vs cubeA centre median **+10 mm**, max **+20 mm** along the finger faces (cube half-width 27.5 mm), > 10 mm in 11/20; across the fingers ~1 mm. Lift (`omx_lift_v2_s1`) for comparison: median 1.9 mm, > 10 mm in 1/20 | **Reward a centred grasp** (recommended): record the grasp offset when cubeA is first grasped and scale the lift / align / stack rewards by a factor that is 1 within ~5 mm and falls off beyond; optionally require ≤ ~10 mm for success. Alternatives: waypoint 1 relative to cubeA's position (structural change to rlwp); narrow cubeA's spawn range or shrink the box (hide the problem / only reduce the worst case) |
-| P2 | **rlwp evaluates an early snapshot of the last waypoint's models** (original code): they are saved only when an episode beats the best reward, never at the end of training | Stack v3: s1 snapshot from episode 67 of 300 (0 % in evaluation vs 98 % in its last training episodes), s2 from episode 91 (61 % vs 94 %) | Save the final models at the end of training too (config option, on only for the `_omx` tasks so Panda / OM-P stay identical), then retrain s1 / s2 |
+| P2 | **rlwp evaluates an early snapshot of the last waypoint's models** (original code): they are saved only when an episode beats the best reward, never at the end of training | Stack v3: s1 snapshot from episode 67 of 300 (0 % in evaluation vs 98 % in its last training episodes), s2 from episode 91 (61 % vs 94 %) | **Fixed 2026-11-22** for Stack: `save_final_models` (train.py option, on in `Stack_omx.yaml`); Stack v4 evaluated with final models. Lift_omx not retrained, so not switched on there |
 | P3 | **Lift swings the cube ~10 cm sideways while lifting** (waypoint 2 at the top of the box, moved to its side) | §3 "Retrained Lift" | Watch on hardware; if it loosens the grasp, a smaller box or a "stay above the spawn point" term |
 | P4 | **cubeA lands rotated relative to cubeB** (the 4-DoF arm's gripper yaw follows the bearing from the base, so cubeA turns ~50° with joint 1 on the way to cubeB) | visible in the viewer; real successes are unaffected so far | Spawn cubeB turned by its bearing (S5) so the faces meet, if landings need more support |
 | P5 | **`check_real_success.py` is still lenient** (#8): Lift "real" doesn't require a grasp; Stack "real" ignores a moved cubeB / tilted cubeA | the environments' own success is now strict, so the viewer / evaluation numbers are honest; only this tool's "real" column is lenient | Align its criteria with the environments' strict checks |
-| P6 | **Stack's landing block only works in a narrow band (y 12–15 cm).** The release waypoint's y is pinned to the waypoint box's edge (y = 15.0 cm in every plan) while its x follows cubeB, like P1 / #6: within the trained 3 cm y range, releasing at the edge still lands inside the 25 mm centre tolerance, so the model never learned to follow cubeB in y | `omx_hw/sim_sweep.py` (2026-11-17, cubeA at 17.3, −1.5): succeeds at every grid point in x 7–13, y 12–15 (wider than trained in x), never at y ≤ 11 or y ≥ 17, never at x ≥ 15 | **Retrain Stack with a larger cubeB area** (§5.5) |
+| P6 | **Stack's landing block only works in a narrow band (y 12–15 cm).** The release waypoint's y is pinned to the waypoint box's edge (y = 15.0 cm in every plan) while its x follows cubeB, like P1 / #6: within the trained 3 cm y range, releasing at the edge still lands inside the 25 mm centre tolerance, so the model never learned to follow cubeB in y | `omx_hw/sim_sweep.py` (2026-11-17, cubeA at 17.3, −1.5): succeeds at every grid point in x 7–13, y 12–15 (wider than trained in x), never at y ≤ 11 or y ≥ 17, never at x ≥ 15 | **Addressed 2026-11-22**: Stack retrained with a 17–20 cm landing ring, x ≥ 0, y −20…+20 cm (`omx_stack_v4_s1`, §3 "Larger landing area", §5.5); the release now follows cubeB on both sides (successful landings a median 11–12 mm off-centre). A `sim_sweep.py` map of v4 is still to do |
+| P7 | **Stack v4 sometimes grazes cubeA on the approach** (gripper contact before the fingers close) | 5–14 of 40 episodes per seed (v3: 0); successes are unaffected so far | Check whether it moves / rotates cubeA (as in the v2 dragging problem); if so, a lower approach speed or a box floor slightly higher near cubeA |
+| P8 | **The learned Stack reward has several optima** over the large landing area, so the waypoints depend on the optimiser's random restarts | 5 restarts: one placement gives 1/10 … 10/10 successes over 10 restart sequences; 20 restarts: stable (89 % vs 72 % mean evaluation) | Use 20 restarts (done in the planner / viewer); longer training or more restarts during training might make the reward itself smoother |
 
 ### 5.4 After that
 
@@ -320,28 +408,20 @@ real OM-X through ROS 2 Jazzy (ROBOTIS `open_manipulator`, U2D2, 12 V, IDs 11–
 repeated trials at random positions with the MuJoCo viewer and logs real vs simulated outcomes. Status: Lift has run on
 the real arm (2026-11-17); Stack not yet. Simulated success beyond the trained areas: omx_hw/README.md.
 
-### 5.5 Planned: retrain Stack for a larger landing-block area (P6)
+### 5.5 Done (2026-11-22): Stack retrained for a larger landing-block area (P6)
 
-Goal: place the landing block anywhere in a larger area (in particular closer to the robot's front, y < 12 cm) and
-have the release follow it. Not started. Steps:
+The plan written here on 2026-11-17 was carried out, with one change of area: the real landing block can only stand
+≥ 17 cm from the arm, so instead of widening cubeB to y 8–15 cm the landing area became a ring **17–20 cm from joint 1,
+x ≥ 0, y −20 … +20 cm** (40°–90° to either side). Details and results: §3 "Larger landing area".
 
-1. **Fix P2 first** (save the final models at the end of training), so all three seeds are evaluated with their
-   final models, not an early snapshot.
-2. **Widen cubeB's spawn range** in `rlwp/cfg/task/Stack_omx.yaml`, mostly in y: e.g. `cubeB_y_range: [0.08, 0.15]`
-   (robot frame y 8–15 cm) and `cubeB_x_range: [-0.09, -0.03]` (x 7–13 cm, already handled in simulation). A spawn range
-   wider than the 25 mm centre tolerance is what forces the release to follow cubeB in y instead of sitting at the box
-   edge; optionally tighten `stack_center_tol` (e.g. 0.015) for the same reason.
-3. **Check the layout before training**: cubeB must not overlap cubeA's area or sit under the carry path (the straight
-   carry rises first, `lift_first`), and every new cubeB position must be reachable at release height:
-   `python omp_tools/check_omp_workspace.py --robot OpenManipulatorX`, then adjust the waypoint box (`workspace:`;
-   y up to 0.15 today) if the new area needs it, and the scripted check `python omp_tools/check_omp_tasks.py --robot omx`.
-4. **Retrain and evaluate**: `omp_tools/train_omp.sh -t Stack_omx -s "0 1 2" -n omx_stack_v4` (~1–2 h on the laptop
-   CPU, seeds in parallel), then `python omp_tools/check_real_success.py --task Stack_omx --runs omx_stack_v4_s0`.
-   A larger area is a harder task: expect to need more episodes (`task.task.epoch_wp`) if success drops.
-5. **Map it and update the hardware tools**: `python omx_hw/sim_sweep.py --task Stack --object cubeB --run
-   omx_stack_v4_s0`, then point `TASKS["Stack"]` in `omx_hw/plan_episode.py` at the new model and update `AREAS` /
-   `BOXES` in `omx_hw/run_trials.py` (the planner reads the trained areas from the task config itself).
-6. P1 (off-centre grasp of cubeA) is a separate reward change; if both are done, retrain once.
+| Planned step | Done |
+|---|---|
+| 1. fix P2 first | `save_final_models` (train.py option, on in `Stack_omx.yaml`): all three v4 seeds evaluated with their final models |
+| 2. widen cubeB's spawn range | new `cubeB_ring` env option (a rectangle can't describe the reachable area); waypoint box widened and cut to 10–21 cm from joint 1 by a new reach ring (`workspace.radial`) |
+| 3. check the layout before training | reach / stacking scan over distance × angle (scripted 39/40 over the new area), spawn distribution checked |
+| 4. retrain and evaluate | `omx_stack_v4`, 400 episodes per waypoint (paper: 300): 94 / 94 / 80 % with 20 optimiser restarts (52 / 94 / 71 % with 5; P8) |
+| 5. update the hardware tools | `plan_episode.py`: default model `omx_stack_v4_s1`, 20 restarts for Stack, ring-aware area check and viewer drawing, `--config`; `run_trials.py`: ring-shaped `AREAS` / new `BOXES` for Stack. Still to do: `sim_sweep.py` map of v4 |
+| 6. P1 (off-centre grasp) | not part of this retrain (still open for the v3 model; check v4) |
 
 ## 6. Reproducing
 
@@ -351,8 +431,8 @@ python omp_tools/check_omx_env.py                       # placement, controller 
 python omp_tools/check_omp_tasks.py --robot omx         # scripted 2-waypoint checks of the _omx tasks
 python omp_tools/check_omp_workspace.py --robot OpenManipulatorX   # reachability grid -> waypoint boxes (~10 min)
 omp_tools/train_omp.sh -t Lift_omx  -s "0 1 2" -n omx_lift_v2       # train + evaluate (with the §5.0 fixes)
-omp_tools/train_omp.sh -t Stack_omx -s "0 1 2" -n omx_stack_v3
-python omp_tools/check_real_success.py --task Stack_omx --runs omx_stack_v3_s0   # real vs false successes
+omp_tools/train_omp.sh -t Stack_omx -s "0 1 2" -n omx_stack_v4
+python omp_tools/check_real_success.py --task Stack_omx --runs omx_stack_v4_s1   # real vs false successes
 ```
 
 Setup (virtualenv, pinned versions) as in [README_OMP.md](README_OMP.md) §1; OM-X commands also in its §9.

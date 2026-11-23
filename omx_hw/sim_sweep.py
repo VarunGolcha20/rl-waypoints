@@ -25,8 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import plan_episode as pe  # noqa: E402  (also changes into rlwp/, where the models are)
 
 DEFAULT_GRID = {("Lift", "cube"): ((14, 22), (-8, 8)), ("Stack", "cubeA"): ((13, 20), (-6, 3)),
-                ("Stack", "cubeB"): ((6, 15), (8, 17))}
-DEFAULT_OTHER = {("Stack", "cubeA"): (10.3, 13.5), ("Stack", "cubeB"): (17.3, -1.5)}
+                ("Stack", "cubeB"): ((-1, 17), (-21, 21))}  # cubeB: covers the 17-20 cm landing ring (2026-11-22)
+DEFAULT_OTHER = {("Stack", "cubeA"): (12.0, 13.0), ("Stack", "cubeB"): (17.3, -1.5)}
 
 
 def main():
@@ -58,7 +58,23 @@ def main():
     start = obs["robot0_eef_pos"].copy()
     axis = env.sim.data.xanchor[env.sim.model.joint_name2id("robot0_joint1")][:2].copy()
     kw = ec["env_kwargs"]
-    area = [(np.array(kw["%s_%s_range" % (obj, c)]) + env.table_offset[i] - axis[i]) * 100 for i, c in enumerate("xy")]
+    ring = kw.get("cubeB_ring") if obj == "cubeB" else None
+    if ring is not None:  # ring-sector landing area (Stack_omx since 2026-11-22): distance / angle around its centre
+        rc = (np.array(ring["center"]) - axis) * 100
+        r0, r1 = [100 * v for v in ring["r_range"]]
+        area = {"center_cm": rc.tolist(), "r_range_cm": [r0, r1], "angle_ranges": ring["angle_ranges"]}
+        area_txt = "%.0f-%.0f cm from joint 1, angle %s" % (r0, r1, " or ".join("%+.0f..%+.0f" % tuple(a) for a in ring["angle_ranges"]))
+
+        def inside(x, y):
+            r, th = np.hypot(x - rc[0], y - rc[1]), np.degrees(np.arctan2(y - rc[1], x - rc[0]))
+            return r0 - 0.01 <= r <= r1 + 0.01 and any(lo - 0.01 <= th <= hi + 0.01 for lo, hi in ring["angle_ranges"])
+    else:
+        area = [(np.array(kw["%s_%s_range" % (obj, c)]) + env.table_offset[i] - axis[i]) * 100 for i, c in enumerate("xy")]
+        (x0, x1), (y0, y1) = area
+        area_txt = "x %.1f..%.1f, y %.1f..%.1f" % (x0, x1, y0, y1)
+
+        def inside(x, y):
+            return x0 - 0.01 <= x <= x1 + 0.01 and y0 - 0.01 <= y <= y1 + 0.01
 
     print("%s %s with model %s, %d positions%s" % (task_name, obj, run, len(xs) * len(ys),
                                                    "" if other is None else ", other cube at (%.1f, %+.1f)" % other))
@@ -71,23 +87,21 @@ def main():
             obs = pe.place_cubes(env, name, [axis + np.array(c, float) / 100 for c in cubes])
             agent = pe.Method(state_dim=ec["state_dim"], objs=pe.policy_objs(name, obs), wp_id=2,
                               save_name=pe.get_save_name(name, ec["robot"], run, None, ec["use_latch"]),
-                              config={"task": task, "n_inits": 5}, workspace=pe.get_workspace(ec, start))
+                              config={"task": task, "n_inits": pe.N_INITS[name]}, workspace=pe.get_workspace(ec, start))
             traj = agent.traj_opt(1, pe.policy_objs(name, obs)).reshape(2, ec["state_dim"])
             ok, _, _ = pe.rollout(env, task, traj, traj[:, :3] + start, obs)
             res[(round(x, 2), round(y, 2))] = bool(ok)
 
-    (x0, x1), (y0, y1) = area
-    print("\n%d/%d succeed in simulation (%.0f s)   # = success, . = fail, [ ] = trained area x %.1f..%.1f, y %.1f..%.1f"
-          % (sum(res.values()), len(res), time.time() - t0, x0, x1, y0, y1))
+    print("\n%d/%d succeed in simulation (%.0f s, %d optimiser restarts)   # = success, . = fail, [ ] = trained area %s"
+          % (sum(res.values()), len(res), time.time() - t0, pe.N_INITS[name], area_txt))
     print("  y(cm) " + "".join("%6g" % x for x in xs) + "   <- x (cm)")
     for y in ys[::-1]:
         row = ""
         for x in xs:
-            inside = x0 - 0.01 <= x <= x1 + 0.01 and y0 - 0.01 <= y <= y1 + 0.01
-            row += ("   [%s]" if inside else "    %s ") % ("#" if res[(round(x, 2), round(y, 2))] else ".")
+            row += ("   [%s]" if inside(x, y) else "    %s ") % ("#" if res[(round(x, 2), round(y, 2))] else ".")
         print("  %+5g %s" % (y, row))
     if args.json:
-        json.dump({"task": task_name, "object": obj, "run": run, "other": other, "trained_area": [list(area[0]), list(area[1])],
+        json.dump({"task": task_name, "object": obj, "run": run, "other": other, "trained_area": area if isinstance(area, dict) else [list(area[0]), list(area[1])],
                    "results": [[x, y, ok] for (x, y), ok in res.items()]}, open(args.json, "w"), indent=1)
 
 

@@ -44,8 +44,12 @@ def get_controller_config(env_cfg):
 def get_env_kwargs(env_cfg, object, use_latch):
     """Extra suite.make arguments: rlwp's original ones, overridden / extended by the task YAML's env.env_kwargs
     (e.g. an adapted task layout for a smaller robot). Without env_kwargs this is exactly the original call."""
-    def plain(v):  # hydra ListConfig -> list, recursively
-        return [plain(x) for x in v] if isinstance(v, (list, tuple)) or type(v).__name__ == 'ListConfig' else v
+    def plain(v):  # hydra ListConfig / DictConfig -> list / dict, recursively
+        if isinstance(v, (list, tuple)) or type(v).__name__ == 'ListConfig':
+            return [plain(x) for x in v]
+        if isinstance(v, dict) or type(v).__name__ == 'DictConfig':
+            return {k: plain(x) for k, x in v.items()}
+        return v
 
     kwargs = dict(single_object_mode=2, object_type=object, use_latch=use_latch)
     kwargs.update({k: plain(v) for k, v in (env_cfg.get('env_kwargs') or {}).items()})
@@ -54,11 +58,50 @@ def get_env_kwargs(env_cfg, object, use_latch):
 
 def get_workspace(env_cfg, state):
     """Waypoint position bounds relative to the start state, from the task YAML's absolute env.workspace
-    (low / high, world frame). None when no workspace is configured (original behaviour)."""
+    (low / high, world frame). None when no workspace is configured (original behaviour).
+    With env.workspace.radial (center [x, y] world, r_min, r_max) the result gets a third element, the reach
+    constraint relative to the start state: (center_xy, r_min, r_max). Waypoints must then also lie between r_min and
+    r_max (horizontally) from the center, e.g. an arm's base axis: a box alone can't describe a ring-shaped reach."""
     ws = env_cfg.get('workspace')
     if ws is None:
         return None
-    return np.array(ws['low']) - state[:3], np.array(ws['high']) - state[:3]
+    lo, hi = np.array(ws['low']) - state[:3], np.array(ws['high']) - state[:3]
+    rad = ws.get('radial')
+    if rad is None:
+        return lo, hi
+    return lo, hi, (np.array(rad['center'], dtype=float) - state[:2], float(rad['r_min']), float(rad['r_max']))
+
+
+def radial_violation(wp, radial):
+    """how far (m) a waypoint's xy lies outside the reach ring (0 inside)"""
+    if radial is None:
+        return 0.0
+    c, r_min, r_max = radial
+    r = np.linalg.norm(np.asarray(wp[:2]) - c)
+    return max(0.0, r_min - r, r - r_max)
+
+
+def radial_project(wp, radial):
+    """move a waypoint's xy radially onto the nearest point of the reach ring (other dims unchanged)"""
+    wp = np.array(wp, dtype=float)
+    if radial is None:
+        return wp
+    c, r_min, r_max = radial
+    d = wp[:2] - c
+    r = np.linalg.norm(d)
+    if r < 1e-9:
+        d, r = np.array([1.0, 0.0]), 1.0
+    wp[:2] = c + d / r * np.clip(r, r_min, r_max)
+    return wp
+
+
+def clip_waypoint(wp, lb, ub, radial=None):
+    """box clip, then (if a reach ring is set) radial projection and box clip again"""
+    wp = np.clip(wp, lb, ub)
+    if radial is not None:
+        for _ in range(3):
+            wp = np.clip(radial_project(wp, radial), lb, ub)
+    return wp
 
 
 def orientation_hold_action(obs, ori_goal):
@@ -67,17 +110,17 @@ def orientation_hold_action(obs, ori_goal):
     return np.clip(rotvec / 0.5, -1., 1.)
 
 
-def bounded_solution(res, xi0, lb, ub, cost_fn, tol=1e-6):
+def bounded_solution(res, xi0, lb, ub, cost_fn, tol=1e-6, radial=None):
     """Guard an SLSQP waypoint solution. SLSQP enforces the box only as a linear constraint and can run away (seen:
     waypoints 1e7 m out of bounds when the learned reward keeps rising outside the box). A non-finite solution is
     replaced by its (clipped) start point, an out-of-bounds one is clipped; both get their cost re-evaluated. A valid
     solution (the normal case) is returned unchanged, so runs that never hit this behave exactly as before."""
     x = res.x
     if not np.all(np.isfinite(x)):
-        x = np.clip(xi0, lb, ub)
+        x = clip_waypoint(xi0, lb, ub, radial)
         return x, cost_fn(x)
-    if np.any(x < lb - tol) or np.any(x > ub + tol):
-        x = np.clip(x, lb, ub)
+    if np.any(x < lb - tol) or np.any(x > ub + tol) or radial_violation(x, radial) > 1e-4:
+        x = clip_waypoint(x, lb, ub, radial)
         return x, cost_fn(x)
     return x, res.fun
 

@@ -45,15 +45,19 @@ PLANNER = os.path.join(HERE, "plan_episode.py")
 EXECUTOR = os.path.join(HERE, "execute_plan.py")
 ROS_PYTHON = "/usr/bin/python3"  # the system Python ROS 2 Jazzy is built for (rclpy); the planner runs in this venv
 
-# trained spawn areas, robot base frame (cm), ((x0, x1), (y0, y1)): plan_episode.py prints the same from the task
-# configs and refuses positions outside them
+# trained spawn areas, robot base frame (cm): a rectangle ((x0, x1), (y0, y1)), or for Stack's landing block a ring
+# sector around joint 1's axis {"r": (r0, r1) cm, "angles": [(lo, hi) deg, ...]} (Stack_omx.yaml cubeB_ring, since
+# 2026-11-22: 17-20 cm, x >= 0, y -20..20 cm). plan_episode.py prints the same from the task configs and refuses
+# positions outside them
 AREAS = {
     "Lift": {"cube": ((16.8, 19.8), (-3.0, 3.0))},
-    "Stack": {"cubeA": ((16.3, 18.3), (-3.0, 0.0)), "cubeB": ((8.8, 11.8), (12.0, 15.0))},
+    "Stack": {"cubeA": ((16.3, 18.3), (-3.0, 0.0)), "cubeB": {"r": (17.0, 20.0), "angles": [(40, 90), (-90, -40)]}},
 }
+MIN_CUBE_DISTANCE_CM = 9.0  # Stack: landing block centre at least this far from cubeA's (cubeB_ring min_distance)
 # waypoint boxes of the task configs (robot base frame, cm): the model can only send the gripper inside these, so
-# positions beyond them can't work whatever the planner is told (Lift_omx.yaml / Stack_omx.yaml `workspace:`)
-BOXES = {"Lift": ((8.8, 20.8), (-10.0, 10.0)), "Stack": ((8.8, 18.8), (-10.0, 15.0))}
+# positions beyond them can't work whatever the planner is told (Lift_omx.yaml / Stack_omx.yaml `workspace:`; Stack's
+# is also cut to 10-21 cm from joint 1 by its reach ring)
+BOXES = {"Lift": ((8.8, 20.8), (-10.0, 10.0)), "Stack": ((-1.2, 18.8), (-21.0, 21.0))}
 WHAT = {"cube": "the 55 mm cube", "cubeA": "cubeA (55 mm, the one to pick)",
         "cubeB": "the landing block (65 mm, top 48 mm above the table, fixed)"}
 QUESTION = {"Lift": "Did the real robot lift the cube?",
@@ -89,6 +93,44 @@ class Sampler:
             return round(self.rng.uniform(*self.xr), 1), round(self.rng.uniform(*self.yr), 1)
         if not self.cells:  # all used: start over
             self.cells = [(x, y) for x in self.xs for y in self.ys]
+            self.rng.shuffle(self.cells)
+        return self.cells.pop()
+
+
+def in_ring(x, y, ring, margin=0.0):
+    r, th = math.hypot(x, y), math.degrees(math.atan2(y, x))
+    if not ring["r"][0] + margin <= r <= ring["r"][1] - margin:
+        return False
+    d = math.degrees(margin / max(r, 1e-6))
+    return any(lo + d <= th <= hi - d for lo, hi in ring["angles"])
+
+
+class RingSampler:
+    """random position in a ring sector (Stack's landing block): distinct grid cells while they last, or continuous"""
+
+    def __init__(self, ring, margin, step, rng, box):
+        self.rng, self.ring, self.margin, self.step = rng, ring, margin, step
+        (bx0, bx1), (by0, by1) = box
+        r1 = ring["r"][1]
+        self.xr, self.yr = (max(-r1, bx0), min(r1, bx1)), (max(-r1, by0), min(r1, by1))
+        self.desc = "%.0f-%.0f cm from joint 1's axis, angle %s" % (
+            *ring["r"], " or ".join("%+.0f..%+.0f deg" % a for a in ring["angles"]))
+        self.cells = None
+        if step > 0:
+            xs = [round(k * step, 2) for k in range(math.ceil(self.xr[0] / step), math.floor(self.xr[1] / step) + 1)]
+            ys = [round(k * step, 2) for k in range(math.ceil(self.yr[0] / step), math.floor(self.yr[1] / step) + 1)]
+            self.all_cells = [(x, y) for x in xs for y in ys if in_ring(x, y, ring, margin)]
+            self.cells = list(self.all_cells)
+            rng.shuffle(self.cells)
+
+    def next(self):
+        if self.cells is None:
+            while True:
+                x, y = round(self.rng.uniform(*self.xr), 1), round(self.rng.uniform(*self.yr), 1)
+                if in_ring(x, y, self.ring, self.margin):
+                    return x, y
+        if not self.cells:  # all used: start over
+            self.cells = list(self.all_cells)
             self.rng.shuffle(self.cells)
         return self.cells.pop()
 
@@ -210,11 +252,23 @@ def main():
     fixed = {k: tuple(getattr(args, k)) for k in AREAS[task] if getattr(args, k)}
     (bx0, bx1), (by0, by1) = BOXES[task]
     e = args.expand_cm
-    areas = {k: ((max(x0 - e, bx0), min(x1 + e, bx1)), (max(y0 - e, by0), min(y1 + e, by1)))
-             for k, ((x0, x1), (y0, y1)) in AREAS[task].items()}
-    samplers = {k: Sampler(a, args.margin_cm, args.step_cm, rng) for k, a in areas.items() if k not in fixed}
+    areas = {}
+    for k, a in AREAS[task].items():
+        if isinstance(a, dict):  # ring sector: --expand-cm grows it inward and outward
+            areas[k] = {"r": (max(a["r"][0] - e, 10.0), min(a["r"][1] + e, 21.0)), "angles": a["angles"]}
+        else:
+            (x0, x1), (y0, y1) = a
+            areas[k] = ((max(x0 - e, bx0), min(x1 + e, bx1)), (max(y0 - e, by0), min(y1 + e, by1)))
+    samplers = {k: (RingSampler(a, args.margin_cm, args.step_cm, rng, BOXES[task]) if isinstance(a, dict) else
+                    Sampler(a, args.margin_cm, args.step_cm, rng)) for k, a in areas.items() if k not in fixed}
     for k, (x, y) in fixed.items():
-        (x0, x1), (y0, y1) = AREAS[task][k]
+        a = AREAS[task][k]
+        if isinstance(a, dict):
+            if not in_ring(x, y, a, -0.5) and not args.allow_outside:
+                sys.exit("--%s %.1f %.1f is outside the trained area (%.0f-%.0f cm from joint 1's axis, angle %s): add "
+                         "--allow-outside to try it anyway" % (k, x, y, *a["r"], " or ".join("%+.0f..%+.0f deg" % g for g in a["angles"])))
+            continue
+        (x0, x1), (y0, y1) = a
         if not (x0 - 0.5 <= x <= x1 + 0.5 and y0 - 0.5 <= y <= y1 + 0.5) and not args.allow_outside:
             sys.exit("--%s %.1f %.1f is outside the trained area (x %.1f..%.1f, y %.1f..%.1f): add --allow-outside to "
                      "try it anyway" % (k, x, y, x0, x1, y0, y1))
@@ -232,7 +286,10 @@ def main():
     print("%s trials on the real OM-X: %d trials, positions seed %d%s" % (
         task, args.trials, seed, ", %.1f cm grid" % args.step_cm if args.step_cm > 0 else ""))
     for k, smp in samplers.items():
-        print("  %-6s random in x %.1f..%.1f cm, y %+.1f..%+.1f cm" % (k, *smp.xr, *smp.yr))
+        if isinstance(smp, RingSampler):
+            print("  %-6s random %s" % (k, smp.desc))
+        else:
+            print("  %-6s random in x %.1f..%.1f cm, y %+.1f..%+.1f cm" % (k, *smp.xr, *smp.yr))
     for k, (x, y) in fixed.items():
         print("  %-6s fixed at (%.1f, %+.1f) cm" % (k, x, y))
     if args.allow_outside:
@@ -251,6 +308,10 @@ def main():
             trial += 1
             attempt += 1
             pos = {k: (fixed[k] if k in fixed else samplers[k].next()) for k in keys}
+            for _ in range(200):  # Stack: keep the landing block away from cubeA (redraw it if needed)
+                if task != "Stack" or "cubeB" in fixed or math.dist(pos["cubeA"], pos["cubeB"]) >= MIN_CUBE_DISTANCE_CM:
+                    break
+                pos["cubeB"] = samplers["cubeB"].next()
             tag = "attempt%02d" % attempt
             plan_path = os.path.join(out_dir, tag + "_plan.json")
             print("=" * 100)

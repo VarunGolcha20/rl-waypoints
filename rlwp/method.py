@@ -1,11 +1,11 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.optimize import minimize, LinearConstraint
+from scipy.optimize import minimize, LinearConstraint, NonlinearConstraint
 import os
 import random
 from models import RNetwork
-from common import bounded_solution
+from common import bounded_solution, clip_waypoint, radial_violation
 from tqdm import tqdm
 
 class Method(object):
@@ -48,24 +48,34 @@ class Method(object):
         # Waypoint bounds. Without a workspace: +-action_space for the optimizer and +-action_space/2 for exploration
         # (original behaviour). With a workspace (position bounds relative to the start state), both use it for the
         # xyz dims; gripper / angle dims keep the original bounds.
+        # An optional third workspace element is a reach ring (center_xy, r_min, r_max) for the xy dims (common.get_workspace).
         self.workspace = workspace
+        self.radial = workspace[2] if workspace is not None and len(workspace) > 2 else None
         self.lb, self.ub = -self.action_dim*np.ones(self.state_dim), self.action_dim*np.ones(self.state_dim)
         self.explore_lb, self.explore_ub = self.lb/2, self.ub/2
         if workspace is not None:
-            self.lb[:3], self.ub[:3] = workspace
-            self.explore_lb[:3], self.explore_ub[:3] = workspace
+            self.lb[:3], self.ub[:3] = workspace[0], workspace[1]
+            self.explore_lb[:3], self.explore_ub[:3] = workspace[0], workspace[1]
 
         self.best_traj = np.concatenate([self.sample_wp() for _ in range(self.wp_id)])
         self.best_reward = -np.inf
         self.lincon = LinearConstraint(np.eye(self.state_dim), self.lb, self.ub)
+        self.constraints = self.lincon
+        if self.radial is not None:
+            c, r_min, r_max = self.radial
+            self.constraints = [self.lincon, NonlinearConstraint(lambda x: (x[0] - c[0])**2 + (x[1] - c[1])**2, r_min**2, r_max**2)]
 
     def sample_wp(self):
         if self.workspace is None:
             return self.action_dim*(np.random.rand(self.state_dim) - 0.5)
-        return self.explore_lb + np.random.rand(self.state_dim)*(self.explore_ub - self.explore_lb)
+        for _ in range(1000):  # uniform in the box; with a reach ring, rejection-sampled inside it
+            wp = self.explore_lb + np.random.rand(self.state_dim)*(self.explore_ub - self.explore_lb)
+            if radial_violation(wp, self.radial) == 0.0:
+                return wp
+        return clip_waypoint(wp, self.lb, self.ub, self.radial)
 
     def clip_wp(self, wp):
-        return wp if self.workspace is None else np.clip(wp, self.lb, self.ub)
+        return wp if self.workspace is None else clip_waypoint(wp, self.lb, self.ub, self.radial)
 
     def traj_opt(self, i_episode, objs):
         self.reward_idx = random.choice(range(self.n_models))
@@ -87,8 +97,8 @@ class Method(object):
                     xi0 = np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim]) + np.random.normal(0, 0.1, size=self.state_dim) if t_idx!=0 else np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim])
                     xi0 = self.clip_wp(xi0)
 
-                    res = minimize(self.get_cost, xi0, method='SLSQP', constraints=self.lincon, options={'eps': 1e-6, 'maxiter': 1e6})
-                    x, fun = bounded_solution(res, xi0, self.lb, self.ub, self.get_cost)
+                    res = minimize(self.get_cost, xi0, method='SLSQP', constraints=self.constraints, options={'eps': 1e-6, 'maxiter': 1e6})
+                    x, fun = bounded_solution(res, xi0, self.lb, self.ub, self.get_cost, radial=self.radial)
                     if fun < min_cost:
                         min_cost = fun
                         self.best_wp = x

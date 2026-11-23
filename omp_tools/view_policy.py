@@ -78,6 +78,8 @@ def main():
     ap.add_argument("--seed", type=int, default=None, help="seed numpy (object placements), e.g. 1000 = rlwp eval seed 0")
     ap.add_argument("--pause", type=float, default=2.0, help="seconds to hold the final state / verdict after each episode")
     ap.add_argument("--episode", type=int, default=1, help="start at this episode (earlier ones are generated, not shown)")
+    ap.add_argument("--n-inits", type=int, default=20, help="random restarts of the waypoint optimiser (rlwp evaluation "
+                                                             "uses 5; 20 gives stable answers for Stack's large landing area)")
     args = ap.parse_args()
     if args.seed is not None:
         np.random.seed(args.seed)
@@ -94,7 +96,7 @@ def main():
     state = lambda o: o["robot0_eef_pos"]
     save_name = get_save_name(name, ec["robot"], args.run, obj, ec["use_latch"])
     agent = Method(state_dim=ec["state_dim"], objs=get_objs(obs), wp_id=2, save_name=save_name,
-                   config={"task": task, "n_inits": 5}, workspace=get_workspace(ec, state(obs)))
+                   config={"task": task, "n_inits": args.n_inits}, workspace=get_workspace(ec, state(obs)))
     wp_steps, gripper_steps = ec["wp_steps"], ec["gripper_steps"]
     print("loaded models/%s" % save_name, flush=True)
     print("controls: Left = previous episode, Right = next episode, Up = replay current episode", flush=True)

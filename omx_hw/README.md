@@ -65,14 +65,23 @@ other positions unless `--allow-outside`):
 |---|---|---|---|
 | Lift | cube | 16.8 … 19.8 | −3.0 … 3.0 |
 | Stack | cubeA (picked) | 16.3 … 18.3 | −3.0 … 0.0 |
-| Stack | cubeB (landing) | 8.8 … 11.8 | 12.0 … 15.0 |
+| Stack | cubeB (landing) | **0 … 15** (x ≥ 0) | **−20 … +20**, and 17–20 cm from joint 1's axis, not within 40° of straight ahead: see below |
+
+**Stack landing area** (`Stack_omx.yaml`, since 2026-11-22): 17–20 cm from joint 1's axis, in front of the axis
+(x ≥ 0), y between −20 and +20 cm, but not within 40° of straight ahead (where cubeA is), so 40°–90° to the left or to
+the right (|y| ≥ ~11 cm), and at least 9 cm (centre to centre) from cubeA. Examples: x 12.0, y 13.0 (47°, left);
+x 2.0, y −18.0 (−84°, right); x 6.0, y 17.0 (71°, left). Trained model: `omx_stack_v4_s1` (the planner's default;
+94 % in simulation). The planner optimises Stack's waypoints with 20 random restarts (`--n-inits`): with fewer, the
+same placement can come out with a closed instead of an open release. The planner prints
+each cube's distance and angle and refuses positions outside the area. The previous model `omx_stack_v3_s0` (old
+landing area x 8.8 … 11.8, y 12.0 … 15.0) is still usable with `--config Stack_omx_v3 --run omx_stack_v3_s0`.
 
 ## Running
 
 ```bash
 # 1) plan (in rl-waypoints, virtualenv). Check the printout: inside the trained area, predicted outcome, warnings.
 ../.venv/bin/python omx_hw/plan_episode.py --task Lift --cube 18.5 -1.0 --out plan_lift.json --view
-../.venv/bin/python omx_hw/plan_episode.py --task Stack --cubeA 17.5 -1.5 --cubeB 10.5 13.5 --out plan_stack.json --view
+../.venv/bin/python omx_hw/plan_episode.py --task Stack --cubeA 17.5 -1.5 --cubeB 12.0 13.0 --out plan_stack.json --view
 
 # 0) bringup NOT running: read-only bus check (IDs 11-15, voltage, errors; torque stays off, nothing moves)
 python3 omx_hw/scan_bus.py
@@ -111,8 +120,9 @@ the air first, with only the block on the table: `--task Stack --cubeB X Y --z-o
 
 Outside the trained areas: `--allow-outside` (each plan is still simulated first; a failing or outside position asks
 before running), `--expand-cm N` to grow the random areas, `--cube` / `--cubeA` / `--cubeB X Y` for fixed positions.
-Simulated success beyond the trained areas (2026-11-17, 1 cm grid, one simulation per point; the waypoint boxes are hard
-limits: Lift x 8.8–20.8 / y ±10, Stack x 8.8–18.8 / y −10…15):
+Simulated success beyond the trained areas (2026-11-17, 1 cm grid, one simulation per point, **Stack rows: the previous
+model `omx_stack_v3_s0`**; the waypoint boxes are hard limits: Lift x 8.8–20.8 / y ±10; Stack then x 8.8–18.8 /
+y −10…15, now x −1.2–18.8 / y ±21 cut to 10–21 cm from joint 1):
 
 | Object | Trained area (x, y) | Succeeded at every grid point in | Never works |
 |---|---|---|---|
@@ -121,8 +131,10 @@ limits: Lift x 8.8–20.8 / y ±10, Stack x 8.8–18.8 / y −10…15):
 | Stack landing block (cubeA at 17.3, −1.5) | 8.8–11.8, 12…15 | x 7–13, y 12…15 | y ≤ 11, y ≥ 17, x ≥ 15 |
 
 Reproduce / re-check with `../.venv/bin/python omx_hw/sim_sweep.py --task Stack --object cubeB` (see its `--help`).
-The landing block's narrow y band is a trained-in limit (the release sits at the box edge y = 15 cm, `OMX_PORT.md` P6);
-a larger landing area needs retraining Stack with a wider cubeB range: plan in `OMX_PORT.md` §5.5.
+The landing block's narrow y band was a trained-in limit of `omx_stack_v3_s0` (the release sat at the box edge
+y = 15 cm, `OMX_PORT.md` P6). Since 2026-11-22 Stack is retrained for the larger landing area (17–20 cm from joint 1,
+x ≥ 0, y −20…+20 cm; `omx_stack_v4_s1`, `OMX_PORT.md` §3 "Larger landing area"); a sweep map of v4 is still to do
+(`sim_sweep.py`, default grid now covers the new area).
 
 Ctrl+C stops the robot's motion (the arm holds) and the script asks how to go on. Results per session in
 `omx_hw/trials/<date-time>/`: `results.csv` (position, simulated prediction, robot run, real outcome, note) plus every

@@ -1,0 +1,54 @@
+# PREVIOUS Stack_omx layout (until 2026-11-22), kept for the model trained on it: omx_stack_v3_s0. Landing cube only in the
+# small rectangle x [-0.07, -0.04], y [0.12, 0.15] (8.8-11.8 cm ahead, 12-15 cm left of joint 1). Current layout: Stack_omx.yaml.
+# Run with task=Stack_omx_v3, or omx_hw/plan_episode.py --task Stack --config Stack_omx_v3 --run omx_stack_v3_s0.
+# Stack with the OpenMANIPULATOR-X (4-DoF, its own gripper), base on the 1.7 cm plate. Run with task=Stack_omx.
+# Same schedule and reward settings as Stack_omp.yaml; the layout is redesigned for the OM-X's short, radial reach (X2).
+name: Stack
+
+env:
+  robot: 'OpenManipulatorX'
+  controller: 'default_open_manipulator_x'
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 15
+  orientation_hold: False
+  lift_first: True                           # after the grasp, rise to the next waypoint's height before moving sideways:
+                                             #   the straight carry clipped cubeB's top edge with 0-7 mm clearance (#2)
+  env_kwargs:                                # layout for the OM-X (base x -0.17; gripper down it reaches ~6-24 cm out):
+    cubeA_x_range: [0.005, 0.025]            # cubeA straight ahead, 17.5-19.5 cm from the base (radial approach: the fingers
+    cubeA_y_range: [-0.03, 0.00]             #   open across the line from the base, so cubes are grasped head-on). Was x
+                                             #   [-0.05, -0.02]: cubeA spawned under the start pose and a finger pad dragged
+                                             #   and rotated it on the way down. Near face now >= 1.5 cm ahead of the pads
+    cubeB_x_range: [-0.07, -0.04]            # cubeB 16-20 cm out, ~45-55 deg to the left: far enough from cubeA that the
+    cubeB_y_range: [0.12, 0.15]              #   straight carry lifts cubeA over it, near enough to reach at carry height
+    cubeA_full_size: [0.055, 0.055, 0.055]   # carried cube 55 mm (user's choice)
+    cubeB_full_size: [0.065, 0.065, 0.048]   # landing cube 65 mm set 17 mm deep in a recess: 48 mm above the table
+    align_weight: 3.0                        # as Stack_omp (IMPLEMENTATION_LOG T7i)
+    align_sharpness: 20.0
+    relative_stack_check: true               # as Stack_omp (T7d)
+    cubeB_fixed: true                        # static landing cube, like the real one set into its recess (#9)
+    stack_check: 'strict'                    # stacked = cubeA rests on cubeB's top, centred, flat, settled, untouched by
+    stack_center_tol: 0.025                  #   the gripper; cubeB upright and in place (#3, #4). If this proves too hard
+    stack_height_tol: 0.006                  #   to learn, loosen these tolerances first (e.g. centre 0.025, tilt 20,
+    stack_max_tilt: 10.0                     #   speed 0.1) before going back to the original check
+    stack_max_speed: 0.05
+    cubeB_max_tilt: 5.0
+    cubeB_max_shift: 0.01
+    success_hold_steps: 5                    # success = stacked for 5 consecutive steps (0.5 s); reward paid per step
+  workspace:                                 # from omp_tools/check_omp_workspace.py --robot OpenManipulatorX, extended to
+    low:  [-0.07, -0.10, 0.825]              #   x 0.03 for the moved cubeA (was x <= -0.02, y +-0.15; y < -0.10 isn't needed).
+    high: [ 0.03,  0.15, 0.905]              #   Tracked < 1 cm everywhere except the far corner x >= 0.02, y >= 0.12 at the
+                                             #   ceiling (up to 24 mm at x 0.03, y 0.15, z 0.905), which the task doesn't need
+
+task:
+  action_space: 0.5
+  batch_size: 30
+  epoch_wp: 300
+
+  exploration_epoch: 75
+  ensemble_sampling_epoch: 150
+  averaging_noise_epoch: 250
+  rand_reset_epoch: 250
+
+  num_eval: 100

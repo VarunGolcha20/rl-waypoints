@@ -94,6 +94,11 @@ class Stack(SingleArmEnv):
         stack_center_tol, stack_height_tol, stack_max_tilt, stack_max_speed, cubeB_max_tilt, cubeB_max_shift: the
             "strict" tolerances (m, m, deg, m/s, deg, m). Loosen them here if the strict rule turns out too hard.
 
+        cubeB_ring (None or dict): None (original): cubeB spawns in the cubeB_x_range / cubeB_y_range rectangle. A dict
+            {"center": [x, y] (world, m), "r_range": [r_min, r_max] (m), "angle_ranges": [[lo, hi], ...] (deg, 0 = +x,
+            counter-clockwise), "min_distance": d (m)} spawns cubeB uniformly over that ring sector (by area), at
+            least min_distance (centre to centre) from cubeA, e.g. anywhere within reach around a small arm's base.
+
         success_hold_steps (int): for stack_check "strict", success needs the stacked condition for this many
             consecutive control steps (1 = instantaneous). The stacking reward is paid from the first step.
 
@@ -214,6 +219,7 @@ class Stack(SingleArmEnv):
         cubeB_max_tilt=5.0,
         cubeB_max_shift=0.01,
         success_hold_steps=1,
+        cubeB_ring=None,
     ):
         assert stack_check in ("original", "strict"), "stack_check must be 'original' or 'strict'"
         self.cubeB_fixed = cubeB_fixed
@@ -222,6 +228,7 @@ class Stack(SingleArmEnv):
         self.stack_max_tilt, self.stack_max_speed = stack_max_tilt, stack_max_speed
         self.cubeB_max_tilt, self.cubeB_max_shift = cubeB_max_tilt, cubeB_max_shift
         self.success_hold_steps = success_hold_steps
+        self.cubeB_ring = cubeB_ring
         self._stack_now, self._stack_hold, self._cubeB_start = False, 0, None
         # alignment reward while cubeA is lifted: align_weight * (1 - tanh(align_sharpness * horizontal distance to cubeB))
         self.align_weight = align_weight
@@ -499,6 +506,10 @@ class Stack(SingleArmEnv):
             object_placements1 = self.placement_initializer1.sample()
             object_placements2 = self.placement_initializer2.sample()
             object_placements = {**object_placements1, **object_placements2}
+            if self.cubeB_ring is not None:  # replace cubeB's rectangle sample by a ring-sector sample
+                pos_b, quat_b, obj_b = object_placements[self.cubeB.name]
+                pos_a = object_placements[self.cubeA.name][0]
+                object_placements[self.cubeB.name] = (self._sample_cubeB_ring(pos_a, pos_b[2]), quat_b, obj_b)
 
             # Loop through all objects and reset their positions
             for obj_pos, obj_quat, obj in object_placements.values():
@@ -514,6 +525,21 @@ class Stack(SingleArmEnv):
                 self.sim.data.set_joint_qpos(obj.joints[0], np.concatenate([np.array(obj_pos), np.array(obj_quat)]))
 
         self._stack_now, self._stack_hold = False, 0
+
+    def _sample_cubeB_ring(self, pos_a, z):
+        """cubeB position uniform (by area) over the ring sector cubeB_ring, away from cubeA"""
+        ring = self.cubeB_ring
+        c = np.array(ring["center"], dtype=float)
+        (r0, r1), spans = ring["r_range"], np.array(ring["angle_ranges"], dtype=float)
+        widths = spans[:, 1] - spans[:, 0]
+        for _ in range(1000):
+            lo, hi = spans[np.random.choice(len(spans), p=widths / widths.sum())]
+            th = np.radians(np.random.uniform(lo, hi))
+            r = np.sqrt(np.random.uniform(r0 ** 2, r1 ** 2))
+            xy = c + r * np.array([np.cos(th), np.sin(th)])
+            if np.linalg.norm(xy - np.asarray(pos_a)[:2]) >= ring.get("min_distance", 0.0):
+                return np.array([xy[0], xy[1], z])
+        raise RuntimeError("cubeB_ring: no position at min_distance from cubeA")
 
     @staticmethod
     def _flat_tilt(rot):

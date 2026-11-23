@@ -41,6 +41,9 @@ class train:
         self.batch_size = config['task']['task']['batch_size']
         self.epoch_wp = config['task']['task']['epoch_wp']
         self.rand_reset_epoch = config['task']['task']['rand_reset_epoch']
+        # Original rlwp saves the last waypoint's models only when an episode beats the best reward, so evaluation can use
+        # an early snapshot. save_final_models: also save them when training ends (default False = original behaviour).
+        self.save_final_models = config['task']['task'].get('save_final_models', False)
 
         self.train()
 
@@ -208,6 +211,9 @@ class train:
 
             pickle.dump(save_data, open('models/' + save_name + '/data.pkl', 'wb'))
 
+        if self.save_final_models:
+            agent.save_model(save_name)
+            tqdm.write("saved the final models of waypoint {}".format(wp_id))
         exit()
 
 
