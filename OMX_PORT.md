@@ -400,6 +400,8 @@ end. In ~4 of 10 episodes it slides or tips off onto the table, after robosuite 
 | P7 | **Stack v4 sometimes grazes cubeA on the approach** (gripper contact before the fingers close) | 5–14 of 40 episodes per seed (v3: 0); successes are unaffected so far | Check whether it moves / rotates cubeA (as in the v2 dragging problem); if so, a lower approach speed or a box floor slightly higher near cubeA |
 | P8 | **The learned Stack reward has several optima** over the large landing area, so the waypoints depend on the optimiser's random restarts | 5 restarts: one placement gives 1/10 … 10/10 successes over 10 restart sequences; 20 restarts: stable (89 % vs 72 % mean evaluation) | Use 20 restarts (done in the planner / viewer); longer training or more restarts during training might make the reward itself smoother |
 
+**Planned (not implemented): object-relative waypoints**, a structural fix for P1 and for generalizing beyond the trained spawn areas (the v4 grasp misses cubeA at (14, +9) cm, both waypoints on the reach ring's edge): [PLAN_RELATIVE_WAYPOINTS.md](PLAN_RELATIVE_WAYPOINTS.md).
+
 ### 5.4 After that
 
 **Hardware:** `omx_hw/` ([omx_hw/README.md](omx_hw/README.md)): `plan_episode.py` turns hand-measured cube positions
