@@ -11,8 +11,12 @@
 #   stop:       pkill -f 'train_rel_detache[d]'; pkill -f 'run_name=omx_stack_rel_s'
 #
 # Options (environment): NAME (default omx_stack_rel), TASK (Stack_omx_rel), SEEDS ("0 1 2"), BLOCK ("5.0 17.5": the
-# landing block's position for the maps), THREADS (4 torch threads per run), SMOKE=1 (tiny schedule, pipeline check).
-# Results: rlwp/logs/$NAME/summary.md, rlwp/logs/$NAME/map_*.txt, and the end of this script's output.
+# landing block's position for the maps), THREADS (4 torch threads per run), SMOKE=1 (tiny schedule, pipeline check),
+# PUSH=0 (don't commit / push the results; default 1).
+# Results: rlwp/logs/$NAME/summary.md, rlwp/logs/$NAME/map_*.txt, and the end of this script's output. Then (PUSH=1)
+# the models and rlwp/models/OpenManipulatorX/Stack/${NAME}_summary.md are committed (only those paths) and pushed.
+# Pushing unattended needs stored GitHub credentials (e.g. git config --global credential.helper store, then one push
+# from a terminal): without them the commit stays local and the output says how to push it.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,7 +34,8 @@ LOGS="$REPO/rlwp/logs/$NAME"
 mkdir -p "$LOGS"
 cd "$REPO"
 stamp() { date '+%Y-%m-%d %H:%M:%S'; }
-echo "[$(stamp)] $NAME: task $TASK, seeds ($SEEDS), $OMP_NUM_THREADS threads per run, host $(hostname), commit $(git rev-parse --short HEAD)"
+START_COMMIT=$(git rev-parse --short HEAD)
+echo "[$(stamp)] $NAME: task $TASK, seeds ($SEEDS), $OMP_NUM_THREADS threads per run, host $(hostname), commit $START_COMMIT"
 
 # 1) training, all seeds in parallel (each run: rlwp/logs/$NAME/seed<k>_train.log)
 t0=$(date +%s)
@@ -96,3 +101,52 @@ for m in relative v4; do
 done
 echo
 echo "Models: rlwp/models/OpenManipulatorX/Stack/${NAME}_s*/   Logs: rlwp/logs/$NAME/"
+
+# 5) commit the results (only the models and a summary next to them) and push
+if [ "${PUSH:-1}" = 1 ] && [ "${SMOKE:-0}" != 1 ]; then
+    echo
+    MDIR="rlwp/models/OpenManipulatorX/Stack"
+    SUMMARY="$MDIR/${NAME}_summary.md"
+    {
+        cat "$LOGS/summary.md" 2>/dev/null
+        echo
+        echo "Evaluation: 100 episodes per seed, 20 optimiser restarts. Trained with commit $START_COMMIT, task $TASK."
+        for m in relative v4; do
+            echo
+            echo "Success map, cubeA grid, landing block at ($BLOCK) cm, $m model (best relative seed: ${BEST:-none}):"
+            echo
+            echo '```'
+            filter < "$LOGS/map_$m.txt" 2>/dev/null | tail -n +2
+            echo '```'
+        done
+    } > "$SUMMARY"
+    PATHS=("$SUMMARY")
+    for s in $SEEDS; do [ -d "$MDIR/${NAME}_s$s" ] && PATHS+=("$MDIR/${NAME}_s$s"); done
+    EVALS=$(grep -h '^EVAL' "$LOGS"/seed*_eval.log 2>/dev/null | sed -E 's/^EVAL OpenManipulatorX\/Stack\///; s/ episodes, reward / ep, reward /')
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    if git add -- "${PATHS[@]}" && git commit -q -F - -- "${PATHS[@]}" <<MSG
+Train $NAME ($TASK): object-relative Stack models, $(echo $SEEDS | wc -w) seeds
+
+Trained and evaluated by omp_tools/train_rel_detached.sh (code: $START_COMMIT).
+Evaluation (100 episodes, 20 optimiser restarts):
+$EVALS
+
+Best seed ${BEST:-none}; success maps vs omx_stack_v4_s1 in ${NAME}_summary.md.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+MSG
+    then
+        echo "[$(stamp)] committed $(git rev-parse --short HEAD) on $BRANCH: ${PATHS[*]}"
+        if GIT_TERMINAL_PROMPT=0 git push origin "$BRANCH" 2>&1 | tail -2; [ "${PIPESTATUS[0]}" = 0 ]; then
+            echo "[$(stamp)] pushed to origin/$BRANCH"
+        elif GIT_TERMINAL_PROMPT=0 git pull --rebase --autostash -q origin "$BRANCH" && GIT_TERMINAL_PROMPT=0 git push origin "$BRANCH"; then
+            echo "[$(stamp)] pushed to origin/$BRANCH (after rebasing onto new remote commits)"
+        else
+            git rebase --abort 2>/dev/null
+            echo "[$(stamp)] PUSH FAILED (no stored GitHub credentials?): the commit is local. Push it with:"
+            echo "    cd $(pwd) && git push origin $BRANCH"
+        fi
+    else
+        echo "[$(stamp)] nothing committed (git add / commit failed)"
+    fi
+fi
