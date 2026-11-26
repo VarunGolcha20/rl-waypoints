@@ -62,6 +62,9 @@ def get_workspace(env_cfg, state):
     With env.workspace.radial (center [x, y] world, r_min, r_max) the result gets a third element, the reach
     constraint relative to the start state: (center_xy, r_min, r_max). Waypoints must then also lie between r_min and
     r_max (horizontally) from the center, e.g. an arm's base axis: a box alone can't describe a ring-shaped reach."""
+    rel = relative_cfg(env_cfg)
+    if rel is not None:  # object-relative waypoints: a list of per-waypoint offset bounds (see waypoint_targets)
+        return [(_vec(b['low']), _vec(b['high'])) for b in rel['bounds']]
     ws = env_cfg.get('workspace')
     if ws is None:
         return None
@@ -123,6 +126,110 @@ def bounded_solution(res, xi0, lb, ub, cost_fn, tol=1e-6, radial=None):
         x = clip_waypoint(x, lb, ub, radial)
         return x, cost_fn(x)
     return x, res.fun
+
+
+# ------------------------------------------------------------------- object-relative waypoints (env.relative_waypoints)
+# Off unless a task YAML sets env.relative_waypoints; every function below then returns exactly the original value.
+#
+#   relative_waypoints:
+#     center: [x, y]          world xy of the arm's vertical axis (joint 1): the arm frame's origin
+#     refs: [cubeA, cubeB]    per waypoint, the object it is relative to (observation key <ref>_pos)
+#     bounds:                 per waypoint, offset bounds (m) [radial, tangential, up]; up from the object's centre
+#       - {low: [...], high: [...]}
+#     object_inputs: none     reward-model object input: none (offsets only), radius (+ each ref's distance from
+#                             center), absolute (+ the original absolute positions)
+#     turn_steps: 30          before waypoint 1 the controller turns the arm about center toward turn_to (default
+#     turn_to: cubeA          refs[0]): the start pose rotated by that object's bearing. Without it the fixed start pose
+#                             breaks the task's rotational symmetry (scripted check 2026-11-26: a fixed grasp offset
+#                             lifted cubeA at 7/7 bearings with the turn, at 1/7 without)
+#
+# Waypoint i is then an offset w = (radial, tangential, up) from object refs[i] in the arm's frame:
+# target = object + Rz(bearing) * w, clipped into the absolute env.workspace (box / reach ring) for safety.
+
+def _vec(v):
+    return np.array([float(x) for x in v])
+
+
+def relative_cfg(env_cfg):
+    """env.relative_waypoints, or None (original absolute waypoints)"""
+    rel = env_cfg.get('relative_waypoints')
+    return rel if rel else None
+
+
+def _bearing(center, p):
+    return float(np.arctan2(p[1] - center[1], p[0] - center[0]))
+
+
+def policy_objs(env_cfg, objs, obs=None):
+    """the reward models' object input: the original objs, or for relative waypoints per object_inputs: none ->
+    nothing (the models see the waypoint offsets only, so they can't tell where the objects are), radius -> each ref
+    object's horizontal distance from center, absolute -> objs"""
+    rel = relative_cfg(env_cfg)
+    if rel is None:
+        return objs
+    mode = rel.get('object_inputs', 'none')
+    if mode == 'none':
+        return np.zeros(0)
+    if mode == 'radius':
+        c = _vec(rel['center'])
+        return np.array([np.linalg.norm(np.asarray(obs[r + '_pos'])[:2] - c) for r in rel['refs']])
+    if mode == 'absolute':
+        return objs
+    raise ValueError("relative_waypoints.object_inputs must be none, radius or absolute, not %r" % mode)
+
+
+def turn_goal(env_cfg, obs):
+    """the turned start pose (start position rotated about center by turn_to's bearing, same radius and height), or
+    None when there is no turn phase"""
+    rel = relative_cfg(env_cfg)
+    if rel is None or not rel.get('turn_steps', 0):
+        return None
+    c = _vec(rel['center'])
+    s0 = np.asarray(obs['robot0_eef_pos'], dtype=float)
+    th = _bearing(c, obs[rel.get('turn_to', rel['refs'][0]) + '_pos']) - _bearing(c, s0)
+    v, cs, sn = s0[:2] - c, np.cos(th), np.sin(th)
+    return np.r_[c + [cs * v[0] - sn * v[1], sn * v[0] + cs * v[1]], s0[2]]
+
+
+def run_turn(env, env_cfg, obs, render=False, record=None):
+    """the turn phase before waypoint 1 (relative waypoints with turn_steps): rlwp's 10 * error rule toward
+    turn_goal, gripper open. Returns the observation after it (unchanged when there is no turn phase). `record`, a
+    list, gets the robot's joint angles after every step (for omx_hw's plans)"""
+    goal = turn_goal(env_cfg, obs)
+    if goal is None:
+        return obs
+    for _ in range(int(relative_cfg(env_cfg)['turn_steps'])):
+        if render:
+            env.render()
+        obs = env.step(np.r_[10.0 * (goal - obs['robot0_eef_pos']), 0.0, 0.0, 0.0, -1.0])[0]
+        if record is not None:
+            record.append(env.robots[0]._joint_positions.copy())
+    return obs
+
+
+def waypoint_targets(env_cfg, wps, state, obs):
+    """absolute targets of the waypoints' position dims. Original: wps + state (waypoints relative to the start
+    state). Relative waypoints: object refs[i] + Rz(its bearing from center) * offset, clipped into env.workspace"""
+    rel = relative_cfg(env_cfg)
+    if rel is None:
+        return wps + state
+    wps = np.asarray(wps, dtype=float)
+    refs = list(rel['refs'])
+    if len(refs) < len(wps):
+        raise ValueError("relative_waypoints.refs names %d objects for %d waypoints" % (len(refs), len(wps)))
+    c, ws = _vec(rel['center']), env_cfg.get('workspace')
+    ring = None
+    if ws is not None and ws.get('radial') is not None:
+        ring = (_vec(ws['radial']['center']), float(ws['radial']['r_min']), float(ws['radial']['r_max']))
+    out = []
+    for w, ref in zip(wps, refs):
+        p = np.asarray(obs[ref + '_pos'], dtype=float)
+        th = _bearing(c, p)
+        t = p + np.array([np.cos(th) * w[0] - np.sin(th) * w[1], np.sin(th) * w[0] + np.cos(th) * w[1], w[2]])
+        if ws is not None:
+            t = clip_waypoint(t, _vec(ws['low']), _vec(ws['high']), ring)
+        out.append(t)
+    return np.array(out)
 
 
 def lift_first_error(error, wp_idx, enabled, tol=0.01):

@@ -35,6 +35,7 @@ RLWP = os.path.join(HERE, "..", "rlwp")
 sys.path.insert(0, RLWP)
 os.chdir(RLWP)  # rlwp loads models from ./models
 from common import get_controller_config, get_env_kwargs, get_save_name, get_workspace, lift_first_error, orientation_hold_action  # noqa: E402
+from common import policy_objs, run_turn, waypoint_targets  # noqa: E402
 from eval import Method  # noqa: E402
 
 import robosuite as suite  # noqa: E402
@@ -92,7 +93,7 @@ def main():
                      initialization_noise=None, hard_reset=False, **get_env_kwargs(ec, obj, ec["use_latch"]))
     rng_reset0 = np.random.get_state()
     obs = env.reset()
-    get_objs = lambda o: np.concatenate([o[k] for k in OBJECTS[name]])
+    get_objs = lambda o: policy_objs(ec, np.concatenate([o[k] for k in OBJECTS[name]]), o)  # reward-model input
     state = lambda o: o["robot0_eef_pos"]
     save_name = get_save_name(name, ec["robot"], args.run, obj, ec["use_latch"])
     agent = Method(state_dim=ec["state_dim"], objs=get_objs(obs), wp_id=2, save_name=save_name,
@@ -143,10 +144,12 @@ def main():
         obs = goto(episode)
         while viewer.is_running():
             command["key"] = None
+            obs = run_turn(env, ec, obs)  # object-relative configs: turn toward the first object (draws no random numbers)
+            viewer.sync()
             traj = agent.traj_opt(episode, get_objs(obs)).reshape(2, ec["state_dim"])
             if args.force_open:
                 traj[-1, 3] = -1.0
-            targets = traj[:, :3] + state(obs)
+            targets = waypoint_targets(ec, traj[:, :3], state(obs), obs)
             goal = R.from_quat(obs["robot0_eef_quat"])
             time_s, grasped, success, reward, first, real = 0, False, False, 0.0, None, False
             if judged:

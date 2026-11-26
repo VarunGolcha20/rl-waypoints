@@ -1,6 +1,7 @@
 # Plan: object-relative waypoints for Stack on the OpenMANIPULATOR-X
 
-Status: **plan only, not implemented** (2026-11-23). Branch `omx-port`. Related open problems in
+Status: **implemented 2026-11-26** (config `Stack_omx_rel`, run `omx_stack_rel`); training and the generalization
+maps pending. §7 records what changed against the plan. Branch `omx-port`. Related open problems in
 [OMX_PORT.md](OMX_PORT.md) §5.3: P1 (off-centre grasp), P6 (landing area), P8 (several optima over a large area).
 
 ## 1. Problem
@@ -158,3 +159,27 @@ spawn area. Schedule as v4 (400 episodes per waypoint, `save_final_models: True`
 * **P7 (v4 grazes cubeA before the grasp)**: check whether it persists in the map / viewer.
 * If the scripted grasp check (§5) fails at other bearings, stop: the symmetry assumption is wrong for this setup and
   the plan needs revising before any training.
+
+## 7. Implementation notes (2026-11-26)
+
+**The scripted check found a gap in the symmetry argument, now fixed by a turn phase.** A fixed grasp offset
+(0, 0, just below cubeA's centre) through rlwp's own controller rule, no learning:
+
+| Setup | Lifted at 7 positions (bearings −52° … +52°, 12–19.5 cm out) |
+|---|---|
+| episode starts from the fixed start pose (straight ahead) | **1/7** (only cubes straight ahead; off to the side a finger hits the cube's side and pushes it) |
+| controller first turns the arm toward cubeA (start pose rotated about joint 1 by cubeA's bearing, 30 steps) | **7/7**, cube facing joint 1 or square to the table |
+
+The arm is symmetric about joint 1 but the episode was not: every episode started straight ahead, so the approach to a
+cube off to the side came in at an angle. `relative_waypoints.turn_steps` / `turn_to` add that turn before waypoint 1
+(`common.run_turn`; also in the planner, whose plan then starts at the turned pose). Setting joint 1 directly is not
+an alternative: the OSC controller does not hold a directly set joint angle (20° → 9.6° in 3 steps).
+
+With the turn, a scripted stack (grasp offset (0, 0, −0.25 cm), release offset (0, 0, +7 cm) over the block) through
+the new code path stacked **9/9**, cubeA 1–3 mm off the block's centre: 5 training layouts and 4 layouts where v4
+fails, e.g. cubeA at (14, +9) cm.
+
+Other checks: seeded smoke runs of `Stack_omx`, `Lift_omx`, Panda `Lift`, OM-P `Stack_omp` before vs after the change:
+training and evaluation data **bit-identical**; the v4 plan at (14, +9) reproduces the 2026-11-23 waypoints; the Lift
+plan is unchanged. `omp_tools/train_rel_detached.sh` runs §4 (smoke-tested end to end). With 4 torch threads per run
+the 3 seeds train in parallel in roughly 30–60 min (without a thread limit, parallel runs were ~6× slower).

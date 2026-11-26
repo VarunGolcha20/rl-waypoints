@@ -23,6 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from view_policy import OBJECTS, lifted_for_real, stacked_for_real  # noqa: E402  (also puts rlwp/ on sys.path, cwd = rlwp/)
 from common import get_controller_config, get_env_kwargs, get_save_name, get_workspace, lift_first_error  # noqa: E402
+from common import policy_objs, run_turn, waypoint_targets  # noqa: E402
 from eval import Method  # noqa: E402
 
 import robosuite as suite  # noqa: E402
@@ -35,7 +36,7 @@ def check(task_name, run, episodes, seed):
     env = suite.make(name, robots=ec["robot"], controller_configs=get_controller_config(ec), has_renderer=False,
                      has_offscreen_renderer=False, use_camera_obs=False, reward_shaping=True, control_freq=10,
                      initialization_noise=None, hard_reset=False, **get_env_kwargs(ec, None, ec["use_latch"]))
-    get_objs = lambda o: np.concatenate([o[k] for k in OBJECTS[name]])
+    get_objs = lambda o: policy_objs(ec, np.concatenate([o[k] for k in OBJECTS[name]]), o)  # reward-model input
     np.random.seed(seed)
     obs = env.reset()
     start = obs["robot0_eef_pos"].copy()
@@ -48,8 +49,9 @@ def check(task_name, run, episodes, seed):
     first_steps = []
     for ep in range(episodes):
         obs = env.reset()
+        obs = run_turn(env, ec, obs)  # object-relative configs: turn toward the first object first
         traj = agent.traj_opt(ep, get_objs(obs)).reshape(num_wp, ec["state_dim"])
-        targets = traj[:, :3] + start
+        targets = waypoint_targets(ec, traj[:, :3], start, obs)
         time_s, success, real, first = 0, False, False, None
         for t in range(num_wp * wp_steps):  # rlwp's get_action (position-only configs)
             i = t // wp_steps

@@ -166,6 +166,10 @@ def start_planner(task, pos, plan_path, log_path, args):
            "--seed", str(args.plan_seed), "--z-offset-cm", str(args.z_offset_cm)]
     if args.allow_outside:
         cmd.append("--allow-outside")
+    if args.config:
+        cmd += ["--config", args.config]
+    if args.run:
+        cmd += ["--run", args.run]
     for k, (x, y) in pos.items():
         cmd += ["--" + k, str(x), str(y)]
     if not args.no_viewer:
@@ -230,6 +234,9 @@ def main():
     ap.add_argument("--z-offset-cm", type=float, default=0.0,
                     help="dry runs: everything this much higher on the robot (planner option; leave cubeA away)")
     ap.add_argument("--plan-seed", type=int, default=0, help="seed of the waypoint optimiser (planner option)")
+    ap.add_argument("--config", default=None, help="task config (planner option), e.g. Stack_omx_rel for an object-relative "
+                                                     "model; default: the task's own")
+    ap.add_argument("--run", default=None, help="model run name (planner option); default: the task's best model")
     ap.add_argument("--time-scale", type=float, default=2.0,
                     help="executor slow-down on top of the plan's timing (default 2, as in the first tests)")
     ap.add_argument("--confirm-steps", action="store_true", help="ask before every step on the robot (Enter / s / q)")
@@ -339,8 +346,11 @@ def main():
                 if args.z_offset_cm and k in ("cube", "cubeA"):
                     print(">>> DRY RUN: keep %s OFF the table (it would be at %s)." % (WHAT[k], describe(x, y)))
                 else:
-                    print(">>> Put %s at %s%s." % (WHAT[k], describe(x, y),
-                                                   " (same as before)" if k in fixed and attempt > 1 else ""))
+                    yaw = plan.get("cube_yaw_deg", {}).get(k)  # object-relative configs: cubes face joint 1
+                    print(">>> Put %s at %s%s%s." % (WHAT[k], describe(x, y),
+                                                     " (same as before)" if k in fixed and attempt > 1 else "",
+                                                     "" if yaw is None else ", TURNED %+.0f deg (counter-clockwise seen from "
+                                                     "above) so one face points at joint 1" % yaw))
             if plan["warnings"]:
                 print(">>> The planner warns: %s" % "; ".join(plan["warnings"]))
                 a = ask(">>> Run it anyway? [r = run, Enter = skip to a new position, q = quit] ", ("r", "", "q"))

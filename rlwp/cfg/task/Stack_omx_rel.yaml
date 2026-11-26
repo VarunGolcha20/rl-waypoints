@@ -1,0 +1,76 @@
+# Stack_omx with OBJECT-RELATIVE waypoints (PLAN_RELATIVE_WAYPOINTS.md). Run with task=Stack_omx_rel.
+# Identical to Stack_omx.yaml (layout, rewards, workspace, schedule) except: waypoint 1 is an offset from cubeA and
+# waypoint 2 an offset from the landing block, in the arm's frame around joint 1; the reward models see the offsets
+# only; the arm first turns toward cubeA; both cubes face joint 1. cubeA keeps its small training patch on purpose:
+# generalization to other bearings should come from the representation, not from more spawn area.
+name: Stack
+
+env:
+  robot: 'OpenManipulatorX'
+  controller: 'default_open_manipulator_x'
+  state_dim: 4
+  use_latch: False
+  wp_steps: 50
+  gripper_steps: 15
+  orientation_hold: False
+  lift_first: True                           # after the grasp, rise to the next waypoint's height before moving sideways:
+                                             #   the straight carry clipped cubeB's top edge with 0-7 mm clearance (#2)
+  env_kwargs:                                # layout for the OM-X (base x -0.17; gripper down it reaches ~6-24 cm out):
+    cubeA_x_range: [0.005, 0.025]            # cubeA straight ahead, 17.5-19.5 cm from the base (radial approach: the fingers
+    cubeA_y_range: [-0.03, 0.00]             #   open across the line from the base, so cubes are grasped head-on). Was x
+                                             #   [-0.05, -0.02]: cubeA spawned under the start pose and a finger pad dragged
+                                             #   and rotated it on the way down. Near face now >= 1.5 cm ahead of the pads
+    cubeB_ring:                              # landing cube 17-20 cm from joint 1's axis (world x -0.158, y 0), in front of
+      center: [-0.158, 0.0]                  #   the axis (x >= 0) with y -20..+20 cm, i.e. 40-90 deg to either side (0 deg
+      r_range: [0.17, 0.20]                  #   = straight ahead, + = left); not within 40 deg of straight ahead (cubeA is
+      angle_ranges: [[40, 90], [-90, -40]]   #   there). Scripted stacking succeeds over 17-20 cm, +-40..+-160 deg (2026-11-22
+      min_distance: 0.09                     #   scan); was the rectangle x [-0.07, -0.04], y [0.12, 0.15]
+    cubeA_full_size: [0.055, 0.055, 0.055]   # carried cube 55 mm (user's choice)
+    cubeB_full_size: [0.065, 0.065, 0.048]   # landing cube 65 mm set 17 mm deep in a recess: 48 mm above the table
+    align_weight: 3.0                        # as Stack_omp (IMPLEMENTATION_LOG T7i)
+    align_sharpness: 20.0
+    relative_stack_check: true               # as Stack_omp (T7d)
+    cubeB_fixed: true                        # static landing cube, like the real one set into its recess (#9)
+    stack_check: 'strict'                    # stacked = cubeA rests on cubeB's top, centred, flat, settled, untouched by
+    stack_center_tol: 0.025                  #   the gripper; cubeB upright and in place (#3, #4). If this proves too hard
+    stack_height_tol: 0.006                  #   to learn, loosen these tolerances first (e.g. centre 0.025, tilt 20,
+    stack_max_tilt: 10.0                     #   speed 0.1) before going back to the original check
+    stack_max_speed: 0.05
+    cubeB_max_tilt: 5.0
+    cubeB_max_shift: 0.01
+    success_hold_steps: 5                    # success = stacked for 5 consecutive steps (0.5 s); reward paid per step
+    face_center: [-0.158, 0.0]               # both cubes turned so one face points at joint 1's axis (on the real table:
+                                             #   turn each cube to face the arm's base)
+  relative_waypoints:                        # rlwp/common.py: waypoint i = offset from refs[i], arm frame around center
+    center: [-0.158, 0.0]                    # joint 1's axis (world xy)
+    refs: [cubeA, cubeB]                     # waypoint 1 (grasp) relative to cubeA, waypoint 2 (release) to the block
+    bounds:                                  # offsets (m) [radial, tangential, up]; up from the object's centre
+      - low:  [-0.03, -0.03, -0.010]         # grasp: cubeA's centre is at table + 2.75 cm (settled during the turn),
+        high: [ 0.03,  0.03,  0.060]         #   so 1.75-8.75 cm above the table (fingertip floor 2.5 cm by the clip)
+      - low:  [-0.04, -0.04,  0.050]         # release: the block's centre is at table + 2.4 cm, so 7.4-10.5 cm above the
+        high: [ 0.04,  0.04,  0.081]         #   table (cubeA's bottom clears the 4.8 cm top from 7.55 cm)
+    object_inputs: none                      # reward models see the offsets (and gripper commands) only
+    turn_steps: 30                           # turn the arm toward cubeA first (start pose rotated by cubeA's bearing;
+    turn_to: cubeA                           #   1-3 mm from it after 30 steps); without it the fixed start pose breaks
+                                             #   the rotational symmetry (scripted check: 7/7 bearings lifted vs 1/7)
+  workspace:                                 # box around the landing area + cubeA, cut down by the reach ring below
+    low:  [-0.17, -0.21, 0.825]              #   (z: floor = fingertips 4 mm above the table, ceiling = carry height)
+    high: [ 0.03,  0.21, 0.905]
+    radial:                                  # waypoints 10-21 cm (horizontally) from joint 1's axis: inside the OM-X's
+      center: [-0.158, 0.0]                  #   reach with the gripper down (release tracking 11-18 mm at 17-20 cm, ~30 mm
+      r_min: 0.10                            #   at 21.5 cm) and away from the arm's own base
+      r_max: 0.21
+
+task:
+  action_space: 0.5
+  batch_size: 30
+  epoch_wp: 400                              # 300 in the paper schedule; longer for the ~11x larger landing area
+                                             #   (2026-11-22). The phases below are scaled by 4/3
+  exploration_epoch: 100                     # was 75
+  ensemble_sampling_epoch: 200               # was 150
+  averaging_noise_epoch: 333                 # was 250
+  rand_reset_epoch: 333                      # was 250
+  save_final_models: True                    # also save the last waypoint's models at the end of training (open problem
+                                             #   P2: otherwise evaluation can use an early best-reward snapshot)
+
+  num_eval: 100

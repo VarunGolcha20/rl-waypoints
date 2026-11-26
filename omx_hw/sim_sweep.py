@@ -38,6 +38,8 @@ def main():
     ap.add_argument("--y", nargs=2, type=float, metavar=("FROM", "TO"), help="grid y range (cm)")
     ap.add_argument("--step", type=float, default=1.0, help="grid step (cm), default 1")
     ap.add_argument("--run", default=None, help="model run name (default: the task's best model)")
+    ap.add_argument("--config", default=None, help="task config instead of the task's default (e.g. Stack_omx_rel for an "
+                                                     "object-relative model, Stack_omx_v3 for omx_stack_v3_s0)")
     ap.add_argument("--json", default=None, help="also save the map as JSON")
     args = ap.parse_args()
 
@@ -50,6 +52,7 @@ def main():
     xs, ys = np.arange(xa, xb + 1e-9, args.step), np.arange(ya, yb + 1e-9, args.step)
     other = tuple(args.other) if args.other else DEFAULT_OTHER.get((name, obj))
     task_name, default_run = pe.TASKS[name]
+    task_name = args.config or task_name
     run = args.run or default_run
 
     env, task = pe.make_env(task_name)
@@ -84,21 +87,27 @@ def main():
             cubes = [(x, y)] if name == "Lift" else ([(x, y), other] if obj == "cubeA" else [other, (x, y)])
             np.random.seed(0)
             env.reset()
+            if len(cubes) == 2 and np.linalg.norm(np.subtract(cubes[0], cubes[1])) < 8.0:
+                res[(round(x, 2), round(y, 2))] = None  # the cubes would overlap: not tested
+                continue
             obs = pe.place_cubes(env, name, [axis + np.array(c, float) / 100 for c in cubes])
-            agent = pe.Method(state_dim=ec["state_dim"], objs=pe.policy_objs(name, obs), wp_id=2,
+            obs = pe.run_turn(env, ec, obs)  # object-relative configs: turn toward cubeA first (no-op otherwise)
+            pobjs = pe.model_objs(ec, pe.policy_objs(name, obs), obs)
+            agent = pe.Method(state_dim=ec["state_dim"], objs=pobjs, wp_id=2,
                               save_name=pe.get_save_name(name, ec["robot"], run, None, ec["use_latch"]),
                               config={"task": task, "n_inits": pe.N_INITS[name]}, workspace=pe.get_workspace(ec, start))
-            traj = agent.traj_opt(1, pe.policy_objs(name, obs)).reshape(2, ec["state_dim"])
-            ok, _, _ = pe.rollout(env, task, traj, traj[:, :3] + start, obs)
+            traj = agent.traj_opt(1, pobjs).reshape(2, ec["state_dim"])
+            ok, _, _ = pe.rollout(env, task, traj, pe.waypoint_targets(ec, traj[:, :3], start, obs), obs)
             res[(round(x, 2), round(y, 2))] = bool(ok)
 
-    print("\n%d/%d succeed in simulation (%.0f s, %d optimiser restarts)   # = success, . = fail, [ ] = trained area %s"
-          % (sum(res.values()), len(res), time.time() - t0, pe.N_INITS[name], area_txt))
+    print("\n%d/%d succeed in simulation (%.0f s, %d optimiser restarts)   # = success, . = fail, o = not tested (cubes overlap), [ ] = trained area %s"
+          % (sum(v is True for v in res.values()), sum(v is not None for v in res.values()), time.time() - t0, pe.N_INITS[name], area_txt))
     print("  y(cm) " + "".join("%6g" % x for x in xs) + "   <- x (cm)")
     for y in ys[::-1]:
         row = ""
         for x in xs:
-            row += ("   [%s]" if inside(x, y) else "    %s ") % ("#" if res[(round(x, 2), round(y, 2))] else ".")
+            v = res[(round(x, 2), round(y, 2))]
+            row += ("   [%s]" if inside(x, y) else "    %s ") % ("o" if v is None else "#" if v else ".")
         print("  %+5g %s" % (y, row))
     if args.json:
         json.dump({"task": task_name, "object": obj, "run": run, "other": other, "trained_area": area if isinstance(area, dict) else [list(area[0]), list(area[1])],

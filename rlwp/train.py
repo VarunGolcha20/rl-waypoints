@@ -13,7 +13,7 @@ import shutil
 
 from memory import MyMemory
 from method import Method
-from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action, lift_first_error
+from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action, lift_first_error, policy_objs, run_turn, waypoint_targets
 
 
 class train:
@@ -129,8 +129,9 @@ class train:
 
         obs, objs = self.reset_env(env, get_objs=True)
         workspace = get_workspace(self.env_cfg, self.get_state(obs))
+        pobjs = policy_objs(self.env_cfg, objs, obs)  # the reward models' object input (objs unless relative waypoints)
 
-        agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
+        agent = Method(state_dim=self.state_dim, objs=pobjs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
 
         memory = MyMemory()
 
@@ -146,7 +147,7 @@ class train:
                 agent.save_model(save_name)
 
                 wp_id += 1
-                agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
+                agent = Method(state_dim=self.state_dim, objs=pobjs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
 
                 memory = MyMemory()
 
@@ -158,12 +159,14 @@ class train:
             episode_reward = 0
             done, truncated = False, False
             obs, objs = self.reset_env(env, get_objs=True)
+            obs = run_turn(env, self.env_cfg, obs, self.render)  # relative waypoints: turn toward the first object
+            pobjs = policy_objs(self.env_cfg, objs, obs)
             self.ori_goal = R.from_quat(obs['robot0_eef_quat'])
 
-            traj_full = agent.traj_opt(i_episode, objs)
+            traj_full = agent.traj_opt(i_episode, pobjs)
 
             state = self.get_state(obs)
-            traj_mat = np.reshape(traj_full, (wp_id, self.state_dim))[:, :self.state_dim-1] + state
+            traj_mat = waypoint_targets(self.env_cfg, np.reshape(traj_full, (wp_id, self.state_dim))[:, :self.state_dim-1], state, obs)
             gripper_mat = np.reshape(traj_full, (wp_id, self.state_dim))[:, self.state_dim-1:]
 
             if len(memory) > self.batch_size:
@@ -196,7 +199,7 @@ class train:
 
                 total_steps += 1
 
-            memory.push(np.concatenate((traj_full, objs)), episode_reward)
+            memory.push(np.concatenate((traj_full, pobjs)), episode_reward)
             save_data['episode'].append(i_episode)
             save_data['reward'].append(episode_reward)
             save_data['success'].append(success)

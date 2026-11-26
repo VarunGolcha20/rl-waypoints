@@ -49,6 +49,15 @@ class Method(object):
         # (original behaviour). With a workspace (position bounds relative to the start state), both use it for the
         # xyz dims; gripper / angle dims keep the original bounds.
         # An optional third workspace element is a reach ring (center_xy, r_min, r_max) for the xy dims (common.get_workspace).
+        # Object-relative waypoints (common.get_workspace returns a list): per-waypoint offset bounds, switched in by
+        # _use_bounds before each waypoint is sampled or optimised.
+        self.per_wp = workspace if isinstance(workspace, list) else None
+        if self.per_wp is not None:
+            self.best_traj = np.concatenate([self._use_bounds(i) or self.sample_wp() for i in range(self.wp_id)])
+            self._use_bounds(0)
+            self.best_reward = -np.inf
+            return
+
         self.workspace = workspace
         self.radial = workspace[2] if workspace is not None and len(workspace) > 2 else None
         self.lb, self.ub = -self.action_dim*np.ones(self.state_dim), self.action_dim*np.ones(self.state_dim)
@@ -64,6 +73,18 @@ class Method(object):
         if self.radial is not None:
             c, r_min, r_max = self.radial
             self.constraints = [self.lincon, NonlinearConstraint(lambda x: (x[0] - c[0])**2 + (x[1] - c[1])**2, r_min**2, r_max**2)]
+
+    def _use_bounds(self, i):
+        """relative waypoints: waypoint i's offset box for the position dims (no reach ring: offsets aren't positions,
+        the absolute targets are clipped instead), the original bounds for the gripper dim"""
+        lo, hi = self.per_wp[i]
+        self.workspace, self.radial = (lo, hi), None
+        self.lb, self.ub = -self.action_dim*np.ones(self.state_dim), self.action_dim*np.ones(self.state_dim)
+        self.explore_lb, self.explore_ub = self.lb/2, self.ub/2
+        self.lb[:3], self.ub[:3] = lo, hi
+        self.explore_lb[:3], self.explore_ub[:3] = lo, hi
+        self.lincon = LinearConstraint(np.eye(self.state_dim), self.lb, self.ub)
+        self.constraints = self.lincon
 
     def sample_wp(self):
         if self.workspace is None:
@@ -88,6 +109,8 @@ class Method(object):
 
             self.load_model = True if idx!=self.wp_id else False
             self.curr_wp = idx-1
+            if self.per_wp is not None:
+                self._use_bounds(self.curr_wp)
 
             if idx == self.wp_id and i_episode <= self.exploration_epoch:
                 self.best_wp = self.sample_wp()

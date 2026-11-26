@@ -99,6 +99,10 @@ class Stack(SingleArmEnv):
             counter-clockwise), "min_distance": d (m)} spawns cubeB uniformly over that ring sector (by area), at
             least min_distance (centre to centre) from cubeA, e.g. anywhere within reach around a small arm's base.
 
+        face_center (None or [x, y]): None (original): the cubes keep the placement sampler's rotation. A world
+            point (e.g. a small arm's base axis): both cubes are turned (yaw) so that one face points at it, as seen by
+            a gripper that always faces that point (object-relative waypoints, rlwp env.relative_waypoints).
+
         success_hold_steps (int): for stack_check "strict", success needs the stacked condition for this many
             consecutive control steps (1 = instantaneous). The stacking reward is paid from the first step.
 
@@ -220,6 +224,7 @@ class Stack(SingleArmEnv):
         cubeB_max_shift=0.01,
         success_hold_steps=1,
         cubeB_ring=None,
+        face_center=None,
     ):
         assert stack_check in ("original", "strict"), "stack_check must be 'original' or 'strict'"
         self.cubeB_fixed = cubeB_fixed
@@ -229,6 +234,7 @@ class Stack(SingleArmEnv):
         self.cubeB_max_tilt, self.cubeB_max_shift = cubeB_max_tilt, cubeB_max_shift
         self.success_hold_steps = success_hold_steps
         self.cubeB_ring = cubeB_ring
+        self.face_center = None if face_center is None else np.array(face_center, dtype=float)
         self._stack_now, self._stack_hold, self._cubeB_start = False, 0, None
         # alignment reward while cubeA is lifted: align_weight * (1 - tanh(align_sharpness * horizontal distance to cubeB))
         self.align_weight = align_weight
@@ -510,6 +516,11 @@ class Stack(SingleArmEnv):
                 pos_b, quat_b, obj_b = object_placements[self.cubeB.name]
                 pos_a = object_placements[self.cubeA.name][0]
                 object_placements[self.cubeB.name] = (self._sample_cubeB_ring(pos_a, pos_b[2]), quat_b, obj_b)
+
+            if self.face_center is not None:  # turn each cube to face face_center (yaw = its bearing, wxyz quat)
+                for name, (pos, quat, obj) in list(object_placements.items()):
+                    yaw = np.arctan2(pos[1] - self.face_center[1], pos[0] - self.face_center[0])
+                    object_placements[name] = (pos, np.array([np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)]), obj)
 
             # Loop through all objects and reset their positions
             for obj_pos, obj_quat, obj in object_placements.values():

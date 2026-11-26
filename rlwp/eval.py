@@ -12,7 +12,7 @@ import time
 import os, sys
 import random
 from models import RNetwork
-from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action, bounded_solution, lift_first_error, clip_waypoint, radial_violation
+from common import get_save_name, get_controller_config, get_env_kwargs, get_workspace, orientation_hold_action, bounded_solution, lift_first_error, clip_waypoint, radial_violation, policy_objs, run_turn, waypoint_targets
 
 
 class Method(object):
@@ -43,6 +43,18 @@ class Method(object):
             self.learned_models.append(models)
 
 
+        # object-relative waypoints (common.get_workspace returns a list): per-waypoint offset bounds, as method.Method
+        self.per_wp = workspace if isinstance(workspace, list) else None
+        if self.per_wp is not None:
+            starts = []
+            for i in range(self.wp_id):
+                self._use_bounds(i)
+                starts.append(self.lb + np.random.rand(self.state_dim)*(self.ub - self.lb))
+            self.best_traj = np.concatenate(starts)
+            self._use_bounds(0)
+            self.best_reward = -np.inf
+            return
+
         # same waypoint bounds as method.Method (original +-action_space when no workspace is configured)
         self.workspace = workspace
         self.radial = workspace[2] if workspace is not None and len(workspace) > 2 else None  # optional reach ring
@@ -62,6 +74,15 @@ class Method(object):
             c, r_min, r_max = self.radial
             self.constraints = [self.lincon, NonlinearConstraint(lambda x: (x[0] - c[0])**2 + (x[1] - c[1])**2, r_min**2, r_max**2)]
 
+    def _use_bounds(self, i):
+        """relative waypoints: waypoint i's offset box (position dims), original gripper bounds, no reach ring"""
+        lo, hi = self.per_wp[i]
+        self.workspace, self.radial = (lo, hi), None
+        self.lb, self.ub = -self.action_dim*np.ones(self.state_dim), self.action_dim*np.ones(self.state_dim)
+        self.lb[:3], self.ub[:3] = lo, hi
+        self.lincon = LinearConstraint(np.eye(self.state_dim), self.lb, self.ub)
+        self.constraints = self.lincon
+
     def traj_opt(self, i_episode, objs):
         self.reward_idx = random.choice(range(self.n_models))
         self.objs = torch.FloatTensor(objs).to(device=self.device)
@@ -73,6 +94,8 @@ class Method(object):
 
             self.load_model = True if idx!=self.wp_id else False
             self.curr_wp = idx-1
+            if self.per_wp is not None:
+                self._use_bounds(self.curr_wp)
 
             for t_idx in range(self.n_inits):
                 xi0 = np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim]) + np.random.normal(0, 0.1, size=self.state_dim) if t_idx!=0 else np.copy(self.best_traj[self.curr_wp*self.state_dim:self.curr_wp*self.state_dim+self.state_dim])
@@ -200,8 +223,9 @@ class evaluate:
 
         obs, objs = self.reset_env(env, get_objs=True)
         workspace = get_workspace(self.env_cfg, self.get_state(obs))
+        pobjs = policy_objs(self.env_cfg, objs, obs)  # the reward models' object input (objs unless relative waypoints)
 
-        agent = Method(state_dim=self.state_dim, objs=objs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
+        agent = Method(state_dim=self.state_dim, objs=pobjs, wp_id=wp_id, save_name=save_name, config=self.config, workspace=workspace)
 
 
         EPOCHS = self.n_eval
@@ -212,12 +236,14 @@ class evaluate:
             episode_reward = 0
             done, truncated = False, False
             obs, objs = self.reset_env(env, get_objs=True)
+            obs = run_turn(env, self.env_cfg, obs, self.render)  # relative waypoints: turn toward the first object
+            pobjs = policy_objs(self.env_cfg, objs, obs)
             self.ori_goal = R.from_quat(obs['robot0_eef_quat'])
 
-            traj_full = agent.traj_opt(i_episode, objs)
+            traj_full = agent.traj_opt(i_episode, pobjs)
 
             state = self.get_state(obs)
-            traj_mat = np.reshape(traj_full, (wp_id, self.state_dim))[:, :self.state_dim-1] + state
+            traj_mat = waypoint_targets(self.env_cfg, np.reshape(traj_full, (wp_id, self.state_dim))[:, :self.state_dim-1], state, obs)
             gripper_mat = np.reshape(traj_full, (wp_id, self.state_dim))[:, self.state_dim-1:]
 
             time_s = 0

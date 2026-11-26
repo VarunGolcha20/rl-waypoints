@@ -35,6 +35,7 @@ RLWP = os.path.join(HERE, "..", "rlwp")
 sys.path.insert(0, RLWP)
 os.chdir(RLWP)  # rlwp loads models from ./models
 from common import get_controller_config, get_env_kwargs, get_save_name, get_workspace, lift_first_error  # noqa: E402
+from common import policy_objs as model_objs, relative_cfg, run_turn, waypoint_targets  # noqa: E402
 from eval import Method  # noqa: E402
 
 import robosuite as suite  # noqa: E402
@@ -61,9 +62,19 @@ def make_env(task_name):
     return env, task
 
 
+def cube_quat(env, xy):
+    """the orientation the simulator's sampler gives a cube at xy: none, or with the env's face_center (object-relative
+    configs) turned so one face points at it (wxyz)"""
+    fc = getattr(env, "face_center", None)
+    if fc is None:
+        return [1, 0, 0, 0]
+    yaw = np.arctan2(xy[1] - fc[1], xy[0] - fc[0])
+    return [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
+
+
 def place_cubes(env, name, cubes_world):
-    """put the cubes where the simulator's sampler would have put them (no rotation, free cubes 1 cm up) and return the
-    reset observation"""
+    """put the cubes where the simulator's sampler would have put them (free cubes 1 cm up, turned as the env would
+    turn them) and return the reset observation"""
     table_z = env.table_offset[2]
     if name == "Lift":
         (x, y), = cubes_world
@@ -71,13 +82,14 @@ def place_cubes(env, name, cubes_world):
         env._cube_start_xy = np.array([x, y])
     else:
         (ax, ay), (bx, by) = cubes_world
-        env.sim.data.set_joint_qpos(env.cubeA.joints[0], [ax, ay, table_z + env.cubeA.size[2] + SPAWN_DROP, 1, 0, 0, 0])
+        env.sim.data.set_joint_qpos(env.cubeA.joints[0], [ax, ay, table_z + env.cubeA.size[2] + SPAWN_DROP,
+                                                          *cube_quat(env, (ax, ay))])
         b = np.array([bx, by, table_z + env.cubeB.size[2]])
         if env.cubeB_fixed:
             env.sim.model.body_pos[env.cubeB_body_id] = b
-            env.sim.model.body_quat[env.cubeB_body_id] = [1, 0, 0, 0]
+            env.sim.model.body_quat[env.cubeB_body_id] = cube_quat(env, (bx, by))
         else:
-            env.sim.data.set_joint_qpos(env.cubeB.joints[0], np.r_[b + [0, 0, SPAWN_DROP], 1, 0, 0, 0])
+            env.sim.data.set_joint_qpos(env.cubeB.joints[0], np.r_[b + [0, 0, SPAWN_DROP], cube_quat(env, (bx, by))])
         env._cubeB_start = b
     env.sim.forward()
     return env._get_observations(force_update=True)
@@ -299,16 +311,35 @@ def main():
                                                                                 "ok" if inside else "OUTSIDE the trained area"))
         if not inside:
             warnings.append("%s is outside the trained spawn area: the model never saw such a position" % k)
+    # object-relative configs: what matters is cubeA's distance from joint 1 (its bearing doesn't: the arm turns toward
+    # it first), and on the real table each cube must be turned to face joint 1, like in the simulation (face_center)
+    cube_yaw = {}
+    if kw.get("face_center") is not None:
+        fc = (np.array(kw["face_center"], dtype=float) - axis) * 100
+        cube_yaw = {k: round(float(np.degrees(np.arctan2(measured[k][1] - fc[1], measured[k][0] - fc[0]))), 1) for k in need}
+        print("  turn the cubes so one face points at joint 1's axis: " + ", ".join(
+            "%s by %+.0f deg (counter-clockwise seen from above)" % (k, v) for k, v in cube_yaw.items()))
+    if relative_cfg(ec) is not None and "cubeA" in measured:
+        (x0, x1), (y0, y1) = areas["cubeA"]
+        corners = [np.hypot(x, y) for x in (x0, x1) for y in (y0, y1)]
+        r_lo = min(corners) if not (y0 <= 0 <= y1) else min(x0, *corners)
+        print("  object-relative model: cubeA %.1f cm from joint 1 (trained %.1f-%.1f cm); its bearing doesn't matter" % (
+            np.hypot(*measured["cubeA"]), r_lo, max(corners)))
     if warnings and not args.allow_outside:
         sys.exit("\n".join(warnings) + "\nMove the cube (or pass --allow-outside to plan anyway).")
 
     # waypoints from the trained reward models (as rlwp's evaluation: frozen ensemble, no exploration)
     obs = place_cubes(env, name, cubes_world)
-    agent = Method(state_dim=ec["state_dim"], objs=policy_objs(name, obs), wp_id=2,
+    # object-relative configs: the arm first turns toward cubeA (as in training); its joint angles become the plan's
+    # start pose. A no-op for the absolute configs
+    turn_q = []
+    obs = run_turn(env, ec, obs, record=turn_q)
+    pobjs = model_objs(ec, policy_objs(name, obs), obs)
+    agent = Method(state_dim=ec["state_dim"], objs=pobjs, wp_id=2,
                    save_name=get_save_name(name, ec["robot"], run, None, ec["use_latch"]),
                    config={"task": task, "n_inits": args.n_inits or N_INITS[name]}, workspace=get_workspace(ec, start))
-    traj = agent.traj_opt(1, policy_objs(name, obs)).reshape(2, ec["state_dim"])
-    targets = traj[:, :3] + start
+    traj = agent.traj_opt(1, pobjs).reshape(2, ec["state_dim"])
+    targets = waypoint_targets(ec, traj[:, :3], start, obs)
     grip = ["close" if g > 0 else "open" for g in traj[:, 3]]
 
     # predicted outcome: the same episode in the simulator
@@ -374,9 +405,13 @@ def main():
         return [q0 + (q1 - q0) * k / n for k in range(1, n + 1)]
 
     moves = {i: adjust([q for ph, q in record if ph == "move %d" % i]) for i in range(2)}
-    q_start = adjust([start_q])[0]
-    q = arm_step("go to the start pose of every simulated episode (gripper down, %.1f cm in front of joint 1, %.1f cm "
-                 "above the table)" % (100 * (start[0] - axis[0]), 100 * (start[2] - env.table_offset[2])),
+    q0 = turn_q[-1] if turn_q else start_q  # relative configs: the start pose turned toward cubeA
+    q_start = adjust([q0])[0]
+    p0 = kin.fk(q0)
+    q = arm_step("go to the start pose of every simulated episode (gripper down, %.1f cm from joint 1%s, %.1f cm above "
+                 "the table)" % (100 * np.linalg.norm(p0[:2] - axis), ", turned %+.0f deg toward cubeA" % np.degrees(
+                     np.arctan2(p0[1] - axis[1], p0[0] - axis[0])) if turn_q else " straight ahead",
+                     100 * (start[2] - env.table_offset[2])),
                  interp(np.array(ROS_HOME), q_start),
                  ROS_HOME, 0.05)
     gripper("open the gripper (as every simulated episode starts)", "open")
@@ -453,7 +488,7 @@ def main():
                 "plate_cm": args.plate_cm, "z_offset_cm": args.z_offset_cm, "waypoints_base_cm": [
                     ((targets[i][:2] - axis) * 100).round(2).tolist() + [round(100 * (targets[i][2] - env.table_offset[2]), 2)]
                     for i in range(2)], "gripper": grip, "predicted": outcome, "warnings": warnings,
-                "arm_joints": ARM_JOINTS, "expected_start": ROS_HOME, "steps": steps}
+                "cube_yaw_deg": cube_yaw, "arm_joints": ARM_JOINTS, "expected_start": ROS_HOME, "steps": steps}
         out = os.path.abspath(os.path.join(HERE, "..", args.out) if not os.path.isabs(args.out) else args.out)
         json.dump(plan, open(out + ".tmp", "w"), indent=1)
         os.replace(out + ".tmp", out)  # atomic: run_trials.py waits for this file while the viewer opens
@@ -594,6 +629,8 @@ def _view_once(env, viewer, steps, task, traj, targets, cubes_world, name):
         return
     obs = env.reset()
     obs = place_cubes(env, name, cubes_world)
+    obs = run_turn(env, task["env"], obs)  # relative configs: turn toward cubeA first (not animated)
+    viewer.sync()
     rollout(env, task, traj, targets, obs, viewer)
 
 
